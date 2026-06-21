@@ -1,0 +1,21 @@
+{
+  "patients": [
+    {
+      "name": "John Doe",
+      "bppvType": "posterior",
+      "bppvSide": "right",
+      "age": 45,
+      "severity": 2.5,
+      "neckStiffness": "mild"
+
+    },
+    {
+      "name": "Mary Smith",
+      "bppvType": "horizontal",
+      "bppvSide": "left",
+      "age": 60,
+      "severity": 4.1,
+      "neckStiffness": "low"
+    }
+  ]
+}
