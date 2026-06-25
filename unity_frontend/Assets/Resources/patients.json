@@ -11,11 +11,36 @@
     },
     {
       "name": "Mary Smith",
-      "bppvType": "horizontal",
+      "bppvType": "posterior",
       "bppvSide": "left",
       "age": 60,
       "severity": 4.1,
       "neckStiffness": "low"
+    },
+    {
+      "name": "Robert Johnson",
+      "bppvType": "posterior",
+      "bppvSide": "right",
+      "age": 35,
+      "severity": 3.2,
+      "neckStiffness": "moderate"
+    },
+    {
+      "name": "Emily Davis",
+      "bppvType": "posterior",
+      "bppvSide": "left",
+      "age": 50,
+      "severity": 1.8,
+      "neckStiffness": "mild"
+    },
+    {
+      "name": "Michael Brown",
+      "bppvType": "posterior",
+      "bppvSide": "right",
+      "age": 55,
+      "severity": 2.9,
+      "neckStiffness": "low"
     }
+
   ]
 }

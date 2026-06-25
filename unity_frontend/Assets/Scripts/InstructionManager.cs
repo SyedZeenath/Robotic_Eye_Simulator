@@ -1,7 +1,7 @@
-using UnityEngine;
-using System.Collections.Generic;
-using TMPro;
 using System.Collections;
+using System.Collections.Generic;
+using UnityEngine;
+using TMPro;
 
 public class InstructionManager : MonoBehaviour
 {
@@ -17,71 +17,85 @@ public class InstructionManager : MonoBehaviour
 
     void Start()
     {
-        // Define all 5 steps (0-4) for the BPPV Dix-Hallpike maneuver
-        if (steps.Count == 0)
-        {
-            Debug.LogWarning("InstructionManager: No steps defined! Add steps in Inspector.");
-            // Or initialize programmatically:
-            /*
-            steps.Add(new InstructionStep { 
-                instructionText = "Please sit upright with your head in a neutral position.",
-                isCompleted = false 
-            });
-            steps.Add(new InstructionStep { 
-                instructionText = "Turn your head 45 degrees to the right.",
-                isCompleted = false 
-            });
-            steps.Add(new InstructionStep { 
-                instructionText = "Now lie down on your back while keeping your head turned.",
-                isCompleted = false 
-            });
-            steps.Add(new InstructionStep { 
-                instructionText = "Hold this position. Observe any eye movements or dizziness.",
-                isCompleted = false 
-            });
-            steps.Add(new InstructionStep { 
-                instructionText = "Return to a sitting position with your head facing forward.",
-                isCompleted = false 
-            });
-            */
-        }
+        InitialiseSteps();
+    }
+
+    // Called programmatically so text is always consistent
+    // Steps 1-4 test right side, steps 5-8 test left side
+    void InitialiseSteps()
+    {
+        steps.Clear();
+
+        steps.Add(new InstructionStep {
+            instructionText = "Please sit upright with your head in a neutral position, looking straight ahead.",
+            isCompleted = false
+        });
+        steps.Add(new InstructionStep {
+            instructionText = "Turn the patient's head 45 degrees to the RIGHT.",
+            isCompleted = false
+        });
+        steps.Add(new InstructionStep {
+            instructionText = "Quickly lie the patient back so their head hangs 20 degrees below the table, head still turned right.",
+            isCompleted = false
+        });
+        steps.Add(new InstructionStep {
+            instructionText = "Hold this position and observe the patient's eyes carefully for any nystagmus.",
+            isCompleted = false
+        });
+        steps.Add(new InstructionStep {
+            instructionText = "Return the patient to the upright sitting position.",
+            isCompleted = false
+        });
+        steps.Add(new InstructionStep {
+            instructionText = "Wait a moment, then turn the patient's head 45 degrees to the LEFT.",
+            isCompleted = false
+        });
+        steps.Add(new InstructionStep {
+            instructionText = "Quickly lie the patient back so their head hangs 20 degrees below the table, head still turned left.",
+            isCompleted = false
+        });
+        steps.Add(new InstructionStep {
+            instructionText = "Hold this position and observe the patient's eyes carefully for any nystagmus.",
+            isCompleted = false
+        });
+        steps.Add(new InstructionStep {
+            instructionText = "Return the patient to the upright sitting position.",
+            isCompleted = false
+        });
+        steps.Add(new InstructionStep {
+            instructionText = "Assessment complete. Please provide your diagnosis.",
+            isCompleted = false
+        });
     }
 
     public void UpdateUI()
     {
-        if (currentStepIndex >= steps.Count) return;
-
-        if (currentStepIndex >= 0)
-        {
-            instructionTextUI.text = $"Step {currentStepIndex + 1}: "
-                                     + steps[currentStepIndex].instructionText;
-        }
+        if (currentStepIndex < 0 || currentStepIndex >= steps.Count) return;
+        instructionTextUI.text = $"Step {currentStepIndex + 1}: "
+                               + steps[currentStepIndex].instructionText;
     }
 
     public void welcomeMessage()
     {
-        tts.SpeakOnDemand("Starting BPPV simulation. Please select a patient to begin.");
+        tts.SpeakOnDemand("Starting Dix-Hallpike simulation. Please select a patient to begin.");
     }
 
     public void SpeakPatientProfile(Patient patient)
     {
         currentPatient = patient;
         string profileDetails = $"Patient Name {patient.name}, Age {patient.age}, "
-                           + $"Neck Stiffness: {patient.neckStiffness}";
-        
+                              + $"Neck Stiffness: {patient.neckStiffness}";
+
         instructionTextUI.text = $"Name: {currentPatient.name}\nAge: {currentPatient.age}\n"
-                                     + $"Neck Stiffness: {currentPatient.neckStiffness}\n\n";
+                               + $"Neck Stiffness: {currentPatient.neckStiffness}\n\n";
 
         tts.SpeakOnDemand(profileDetails);
-        StartCoroutine(MoveToStep0());  
+        StartCoroutine(MoveToStep0());
     }
 
     IEnumerator MoveToStep0()
     {
-        // Wait for patient profile TTS to finish
         yield return new WaitWhile(() => tts.IsSpeaking);
-
-        // Advance to Step 0
         currentStepIndex = 0;
         UpdateUI();
         SpeakCurrentStep();
@@ -91,22 +105,18 @@ public class InstructionManager : MonoBehaviour
     public void SpeakCurrentStep()
     {
         if (currentStepIndex < 0 || currentStepIndex >= steps.Count) return;
-
         string stepInstruction = $"Step {currentStepIndex + 1}: {steps[currentStepIndex].instructionText}";
         tts.SpeakOnDemand(stepInstruction);
         Debug.Log($"[InstructionManager] Speaking: {stepInstruction}");
     }
-    
-    // ************************************************************************
-    // Called by ArduinoHeadTracker when a step's physical condition is met
-    // ************************************************************************
+
     public void CompleteStepFromArduino()
-    {   
-        if (currentStepIndex < 0) return; // not started yet
-        if (SimulationUI.Instance.patientModel == null) return; // no patient selected
-        if (!SimulationUI.Instance.patientModel.activeSelf) return; // simulation not active   
-        // GATE: Block if TTS is still speaking the current instruction
-        if (tts != null && tts.IsSpeaking) 
+    {
+        if (currentStepIndex < 0) return;
+        if (SimulationUI.Instance.patientModel == null) return;
+        if (!SimulationUI.Instance.patientModel.activeSelf) return;
+
+        if (tts != null && tts.IsSpeaking)
         {
             Debug.Log($"[InstructionManager] Cannot advance - TTS still speaking Step {currentStepIndex + 1}");
             return;
@@ -121,20 +131,16 @@ public class InstructionManager : MonoBehaviour
 
             if (currentStepIndex < steps.Count)
             {
-                // Advance to next step and speak instruction immediately
                 UpdateUI();
                 SpeakCurrentStep();
                 Debug.Log($"[InstructionManager] Advanced to Step {currentStepIndex}");
             }
             else
             {
-                                
-                // All steps completed
-                instructionTextUI.text = "Simulation Complete. Please give your diagnosis.";
-                tts.SpeakOnDemand("Simulation Complete. Please give your diagnosis.");
-                Debug.Log("[InstructionManager] Simulation complete - triggering diagnosis flow");
+                // All 10 steps complete — trigger diagnosis
+                instructionTextUI.text = "Assessment complete. Please give your diagnosis.";
+                Debug.Log("[InstructionManager] All steps complete - triggering diagnosis flow");
 
-                // Hand off to diagnosis controller instead of showing static panel
                 DiagnosisFeedbackController diagCtrl = FindObjectOfType<DiagnosisFeedbackController>();
                 if (diagCtrl != null)
                     diagCtrl.TriggerDiagnosisFlow();
@@ -147,7 +153,7 @@ public class InstructionManager : MonoBehaviour
         // Manual override with Space key for testing/debugging
         if (Input.GetKeyDown(KeyCode.Space))
         {
-            Debug.Log("[InstructionManager] Manual step completion via Space key");
+            Debug.Log("[InstructionManager] Manual step via Space");
             CompleteStepFromArduino();
         }
     }

@@ -30,8 +30,10 @@ public class ArduinoSerialReader : MonoBehaviour
     // ********* Nystagmus timing ******************************************
     [Header("Nystagmus Timing")]
     public float holdBeforeTrigger = 1.0f;
+    public float noNystagmusHoldTime = 5.0f;  // hold time on unaffected side
 
-    [Header("BPPV Side — set from patient data")]
+    // ********* BPPV info (set from patient data) *****************************
+    [Header("BPPV Side - set from patient data")]
     public string activeBppvSide = "right"; // "right" or "left"
     public string activeBppvType = "posterior"; // "posterior", "horizontal", "anterior"
 
@@ -64,14 +66,17 @@ public class ArduinoSerialReader : MonoBehaviour
     private Quaternion _targetRotation = Quaternion.identity;
 
     // ********* Step 3 state **********************************************
+    // Shared across all steps
+    private float _lastYaw;
+    private float _lastPitch;
+    private float _confirmedYaw = 0f;
+    // Step 3 and 7 - nystagmus / no-nystagmus hold
     private bool _nystagmusTriggered = false;
     private float _nystagmusTimer = 0f;
     private bool _triggerSent = false;
     private float _triggerSentTime = 0f;
     private const float MIN_NYSTAGMUS_TIME = 5f;
-    private float _lastYaw;
-    private float _lastPitch;
-    private float _confirmedYaw = 0f;
+    private float _noNystagmusHoldTimer = 0f;
 
     // ********* Frame struct **********************************************
     private struct CombinedFrame
@@ -175,6 +180,7 @@ public class ArduinoSerialReader : MonoBehaviour
 
         switch (step)
         {
+            // Step 0: Confirm neutral position
             case 0:
                 if (Mathf.Abs(yaw) < 10f && Mathf.Abs(pitch) < 10f)
                 {
@@ -183,82 +189,51 @@ public class ArduinoSerialReader : MonoBehaviour
                 }
                 break;
 
+            // Step 1: Turn head RIGHT 45 degrees
             case 1:
-                if (IsHeadRotated45())
+                if (yaw >= yawThreshold - 2f && yaw <= yawThreshold + 15f)
                 {
-                    _confirmedYaw = _lastYaw; // lock yaw at this moment
-                    Debug.Log($"✔ Step 1: Head rotated 45° {activeBppvSide} (Y:{_lastYaw:F1}°)");
+                    _confirmedYaw = yaw;
+                    Debug.Log($"✔ Step 1: Head turned right (Y:{yaw:F1}°)");
                     instructionManager.CompleteStepFromArduino();
                 }
-                else if (Mathf.Abs(_lastYaw) > 10f)
-                    Debug.Log($"[Step 1] Progress: yaw={_lastYaw:F1}° / {(activeBppvSide == "right" ? "" : "-")}{yawThreshold}°");
+                else if (yaw > 10f)
+                    Debug.Log($"[Step 1] Progress: yaw={yaw:F1}° / {yawThreshold}°");
                 break;
 
+            // Step 2: Lie back with head turned right
             case 2:
-                if (IsInDixHallpikePosition())
+                if (pitch >= pitchThreshold && _confirmedYaw >= yawThreshold - 2f)
                 {
-                    Debug.Log($"✔ Step 2: Supine (P:{pitch:F1}° Y:{_confirmedYaw:F1}°)");
+                    Debug.Log($"✔ Step 2: Right Dix-Hallpike position (P:{pitch:F1}° Y:{_confirmedYaw:F1}°)");
                     instructionManager.CompleteStepFromArduino();
                 }
                 else if (pitch > 5f)
-                    Debug.Log($"[Step 2] Progress: pitch={pitch:F1}° / {pitchThreshold}°, yaw={_confirmedYaw:F1}°");
+                    Debug.Log($"[Step 2] Progress: pitch={pitch:F1}° / {pitchThreshold}° yaw={_confirmedYaw:F1}°");
                 break;
 
+            // Step 3: Hold right position and observe
+            // If right BPPV: nystagmus fires and completes naturally
+            // If left BPPV: no nystagmus, hold 5 seconds then advance
             case 3:
-                if (IsInDixHallpikePosition())
+                if (pitch >= pitchThreshold && _confirmedYaw >= yawThreshold - 2f)
                 {
-                    if (!_nystagmusTriggered)
-                    {
-                        _nystagmusTimer += Time.deltaTime;
-                        Debug.Log($"[Step 3] Holding... {_nystagmusTimer:F1}s / {holdBeforeTrigger}s");
-
-                        if (_nystagmusTimer >= holdBeforeTrigger)
-                        {
-                            _nystagmusTriggered = true;
-                            _nystagmusTimer = 0f;
-                            _triggerSent = true;
-                            _triggerSentTime = Time.time;
-                            Debug.Log("✔ Latency complete → sending TRIGGER");
-                            string command = activeBppvSide == "left" ? "L" : "R";
-                            Debug.Log($"[Serial] Sending BPPV command: {command} (type: {activeBppvType})");
-                            SendCommand(command);
-                        }
-                    }
+                    if (activeBppvSide == "right")
+                        HandleNystagmusSide();
                     else
-                    {
-                        Debug.Log($"[Step 3] Nystagmus active... Phase:{CurrentPhase}");
-                        bool minTimePassed = (Time.time - _triggerSentTime) >= MIN_NYSTAGMUS_TIME;
-                        bool motorsAtReversal = CurrentPhase == 5;
-
-                        if (_triggerSent && minTimePassed && motorsAtReversal)
-                        {
-                            Debug.Log("✔ Step 3 complete: Nystagmus finished");
-                            _nystagmusTriggered = false;
-                            _nystagmusTimer = 0f;
-                            _triggerSent = false;
-                            instructionManager.CompleteStepFromArduino();
-                        }
-                    }
-                }
-                else
-                {
-                    Debug.Log($"[Step 3] Nystagmus active... Phase:{CurrentPhase}");
-                    if (CurrentPhase == 5 && _nystagmusTriggered)
-                    {
-                        Debug.Log("✔ Step 3 complete: Nystagmus finished");
-                        _nystagmusTriggered = false;
-                        _nystagmusTimer = 0f;
-                        instructionManager.CompleteStepFromArduino();
-                    }
+                        HandleUnaffectedSideHold();
                 }
                 break;
 
+            // Step 4: Return to neutral after right side
             case 4:
-                if (Mathf.Abs(pitch) < 15f)
+                if (Mathf.Abs(pitch) < 15f && Mathf.Abs(yaw) < 20f)
                 {
-                    if (CurrentPhase == 0)
+                    bool motorsSettled = activeBppvSide == "right" ? CurrentPhase == 0 : true;
+                    if (motorsSettled)
                     {
-                        Debug.Log($"✔ Step 4 complete: Upright and motors neutral (P:{pitch:F1}°)");
+                        Debug.Log($"✔ Step 4: Neutral after right side (P:{pitch:F1}°)");
+                        ResetHoldState();
                         instructionManager.CompleteStepFromArduino();
                     }
                     else
@@ -267,22 +242,121 @@ public class ArduinoSerialReader : MonoBehaviour
                 else if (Mathf.Abs(pitch) < 30f)
                     Debug.Log($"[Step 4] Returning... pitch={pitch:F1}°");
                 break;
+
+            // Step 5: Turn head LEFT 45 degrees
+            case 5:
+                if (yaw <= -yawThreshold + 2f && yaw >= -yawThreshold - 15f)
+                {
+                    _confirmedYaw = yaw;
+                    Debug.Log($"✔ Step 5: Head turned left (Y:{yaw:F1}°)");
+                    instructionManager.CompleteStepFromArduino();
+                }
+                else if (yaw < -10f)
+                    Debug.Log($"[Step 5] Progress: yaw={yaw:F1}° / -{yawThreshold}°");
+                break;
+
+            // Step 6: Lie back with head turned left
+            case 6:
+                if (pitch >= pitchThreshold && _confirmedYaw <= -yawThreshold + 2f)
+                {
+                    Debug.Log($"✔ Step 6: Left Dix-Hallpike position (P:{pitch:F1}° Y:{_confirmedYaw:F1}°)");
+                    instructionManager.CompleteStepFromArduino();
+                }
+                else if (pitch > 5f)
+                    Debug.Log($"[Step 6] Progress: pitch={pitch:F1}° / {pitchThreshold}° yaw={_confirmedYaw:F1}°");
+                break;
+
+            // Step 7: Hold left position and observe
+            // If left BPPV: nystagmus fires and completes naturally
+            // If right BPPV: no nystagmus, hold 5 seconds then advance
+            case 7:
+                if (pitch >= pitchThreshold && _confirmedYaw <= -yawThreshold + 2f)
+                {
+                    if (activeBppvSide == "left")
+                        HandleNystagmusSide();
+                    else
+                        HandleUnaffectedSideHold();
+                }
+                break;
+
+            // Step 8: Return to neutral after left side
+            case 8:
+                if (Mathf.Abs(pitch) < 15f && Mathf.Abs(yaw) < 20f)
+                {
+                    bool motorsSettled = activeBppvSide == "left" ? CurrentPhase == 0 : true;
+                    if (motorsSettled)
+                    {
+                        Debug.Log($"✔ Step 8: Neutral after left side (P:{pitch:F1}°)");
+                        ResetHoldState();
+                        instructionManager.CompleteStepFromArduino();
+                    }
+                    else
+                        Debug.Log($"[Step 8] Upright but waiting for motor reversal. Phase:{CurrentPhase}");
+                }
+                else if (Mathf.Abs(pitch) < 30f)
+                    Debug.Log($"[Step 8] Returning... pitch={pitch:F1}°");
+                break;
+
+            // Step 9: Diagnosis fired automatically when Step 8 completes
+            case 9:
+                break;
         }
     }
 
-    private bool IsHeadRotated45()
+    private void HandleNystagmusSide()
     {
-        if (activeBppvSide == "right")
-            return _lastYaw >= yawThreshold - 2f && _lastYaw < yawThreshold + 2f;
+        int step = instructionManager.currentStepIndex;
+        if (!_nystagmusTriggered)
+        {
+            _nystagmusTimer += Time.deltaTime;
+            Debug.Log($"[Step {step}] Holding affected side... {_nystagmusTimer:F1}s / {holdBeforeTrigger}s");
+            if (_nystagmusTimer >= holdBeforeTrigger)
+            {
+                _nystagmusTriggered = true;
+                _nystagmusTimer = 0f;
+                _triggerSent = true;
+                _triggerSentTime = Time.time;
+                string command = activeBppvSide == "left" ? "L" : "R";
+                Debug.Log($"✔ Step {step}: Sending {command}");
+                SendCommand(command);
+            }
+        }
         else
-            return _lastYaw <= -yawThreshold + 2f && _lastYaw > -yawThreshold - 2f;
+        {
+            bool minTimePassed = (Time.time - _triggerSentTime) >= MIN_NYSTAGMUS_TIME;
+            bool motorsAtReversal = CurrentPhase == 5;
+            Debug.Log($"[Step {step}] Nystagmus active Phase:{CurrentPhase} MinTime:{minTimePassed}");
+            if (_triggerSent && minTimePassed && motorsAtReversal)
+            {
+                Debug.Log($"✔ Step {step} complete: Nystagmus finished");
+                _nystagmusTriggered = false;
+                _nystagmusTimer = 0f;
+                _triggerSent = false;
+                instructionManager.CompleteStepFromArduino();
+            }
+        }
     }
-    private bool IsInDixHallpikePosition()
-    {        
-        if (activeBppvSide == "right")
-            return _lastPitch >= pitchThreshold && _confirmedYaw >= yawThreshold - 2f;
-        else
-            return _lastPitch >= pitchThreshold && _confirmedYaw <= -yawThreshold + 2f;
+
+    private void HandleUnaffectedSideHold()
+    {
+        int step = instructionManager.currentStepIndex;
+        _noNystagmusHoldTimer += Time.deltaTime;
+        Debug.Log($"[Step {step}] Unaffected side holding... {_noNystagmusHoldTimer:F1}s / {noNystagmusHoldTime}s");
+        if (_noNystagmusHoldTimer >= noNystagmusHoldTime)
+        {
+            Debug.Log($"✔ Step {step} complete: No nystagmus on unaffected side");
+            _noNystagmusHoldTimer = 0f;
+            instructionManager.CompleteStepFromArduino();
+        }
+    }
+
+    private void ResetHoldState()
+    {
+        _nystagmusTriggered = false;
+        _nystagmusTimer = 0f;
+        _triggerSent = false;
+        _triggerSentTime = 0f;
+        _noNystagmusHoldTimer = 0f;
     }
     // ------------------------------------------------------------------
     // SERIAL PORT
