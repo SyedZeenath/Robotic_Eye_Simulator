@@ -106,7 +106,7 @@ public class InstructionManager : MonoBehaviour
         Debug.Log($"[InstructionManager] Speaking: {stepInstruction}");
     }
 
-    public void CompleteStepFromArduino()
+    public void CompleteStep()
     {
         if (currentStepIndex < 0) return;
         if (SimulationUI.Instance.patientModel == null) return;
@@ -150,7 +150,7 @@ public class InstructionManager : MonoBehaviour
         if (Input.GetKeyDown(KeyCode.Space))
         {
             Debug.Log("[InstructionManager] Manual step via Space");
-            CompleteStepFromArduino();
+            CompleteStep();
         }
     }
 }

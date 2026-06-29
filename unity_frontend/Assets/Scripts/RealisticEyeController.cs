@@ -1,3 +1,4 @@
+using System;
 using UnityEngine;
 
 public class RealisticEyeController : MonoBehaviour
@@ -36,6 +37,7 @@ public class RealisticEyeController : MonoBehaviour
     private float _directTorsion = 0f;
     private float _directVertical = 0f;
     private float _directHorizontal = 0f;
+    private string _activeBppvSide = "right"; // default to right
     private bool _serialMode = false; // true when Serial data is arriving
 
     // *********** Smoothing *****************************************************
@@ -80,11 +82,12 @@ public class RealisticEyeController : MonoBehaviour
     // Called by ArduinoSerialReader.Update() every frame with latest eye angles
     // from Arduino. Stores values for use in UpdateSerialMode().
     // *************************************************************************
-    public void ApplyDirectEyeAngles(float torsion, float vertical, float horizontal)
+    public void ApplyDirectEyeAngles(float torsion, float vertical, float horizontal, string activeBppvSide)
     {
         _directTorsion = torsion;
         _directVertical = vertical;
         _directHorizontal = horizontal;
+        _activeBppvSide = activeBppvSide;
         _serialMode = true;
     }
 
@@ -120,11 +123,14 @@ public class RealisticEyeController : MonoBehaviour
         // Combine VOR with physical nystagmus
         Vector3 finalRotation = vor + nystagmusOffset;
 
-        // Apply to both eyes
-        // TO DO: Update the code to allow for independent left/right eye angles
-        // (currently both eyes are set to the same rotation)
-        leftEye.localRotation = Quaternion.Euler(finalRotation);
-        rightEye.localRotation = Quaternion.Euler(finalRotation);
+        if (_activeBppvSide == "left")
+        {
+            leftEye.localRotation = Quaternion.Euler(finalRotation);
+        }
+        else
+        {
+            rightEye.localRotation = Quaternion.Euler(finalRotation);
+        }
     }
 
     // ------------------------------------------------------------------------
@@ -178,8 +184,14 @@ public class RealisticEyeController : MonoBehaviour
         Vector3 nystagmusOffset = GetCanalPattern(activeCanal, eyeAngle);
         Vector3 final = vor + nystagmusOffset;
 
-        leftEye.localRotation = Quaternion.Euler(final);
-        rightEye.localRotation = Quaternion.Euler(final);
+        if (_activeBppvSide == "left")
+        {
+            leftEye.localRotation = Quaternion.Euler(final);
+        }
+        else
+        {
+            rightEye.localRotation = Quaternion.Euler(final);
+        }
     }
 
     float ComputeEnvelope(float t)

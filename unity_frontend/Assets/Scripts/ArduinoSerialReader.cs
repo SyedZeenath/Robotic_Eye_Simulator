@@ -132,7 +132,8 @@ public class ArduinoSerialReader : MonoBehaviour
                 eyeController.ApplyDirectEyeAngles(
                     latest.torsion,
                     latest.vertical,
-                    latest.horizontal
+                    latest.horizontal,
+                    activeBppvSide
                 );
 
             if (showDebugLog)
@@ -185,7 +186,7 @@ public class ArduinoSerialReader : MonoBehaviour
                 if (Mathf.Abs(yaw) < 10f && Mathf.Abs(pitch) < 10f)
                 {
                     Debug.Log($"✔ Step 0: Neutral confirmed (Y:{yaw:F1}° P:{pitch:F1}°)");
-                    instructionManager.CompleteStepFromArduino();
+                    instructionManager.CompleteStep();
                 }
                 break;
 
@@ -195,7 +196,7 @@ public class ArduinoSerialReader : MonoBehaviour
                 {
                     _confirmedYaw = yaw;
                     Debug.Log($"✔ Step 1: Head turned right (Y:{yaw:F1}°)");
-                    instructionManager.CompleteStepFromArduino();
+                    instructionManager.CompleteStep();
                 }
                 else if (yaw > 10f)
                     Debug.Log($"[Step 1] Progress: yaw={yaw:F1}° / {yawThreshold}°");
@@ -206,7 +207,7 @@ public class ArduinoSerialReader : MonoBehaviour
                 if (pitch >= pitchThreshold && _confirmedYaw >= yawThreshold - 2f)
                 {
                     Debug.Log($"✔ Step 2: Right Dix-Hallpike position (P:{pitch:F1}° Y:{_confirmedYaw:F1}°)");
-                    instructionManager.CompleteStepFromArduino();
+                    instructionManager.CompleteStep();
                 }
                 else if (pitch > 5f)
                     Debug.Log($"[Step 2] Progress: pitch={pitch:F1}° / {pitchThreshold}° yaw={_confirmedYaw:F1}°");
@@ -234,7 +235,7 @@ public class ArduinoSerialReader : MonoBehaviour
                     {
                         Debug.Log($"✔ Step 4: Neutral after right side (P:{pitch:F1}°)");
                         ResetHoldState();
-                        instructionManager.CompleteStepFromArduino();
+                        instructionManager.CompleteStep();
                     }
                     else
                         Debug.Log($"[Step 4] Upright but waiting for motor reversal. Phase:{CurrentPhase}");
@@ -249,7 +250,7 @@ public class ArduinoSerialReader : MonoBehaviour
                 {
                     _confirmedYaw = yaw;
                     Debug.Log($"✔ Step 5: Head turned left (Y:{yaw:F1}°)");
-                    instructionManager.CompleteStepFromArduino();
+                    instructionManager.CompleteStep();
                 }
                 else if (yaw < -10f)
                     Debug.Log($"[Step 5] Progress: yaw={yaw:F1}° / -{yawThreshold}°");
@@ -260,7 +261,7 @@ public class ArduinoSerialReader : MonoBehaviour
                 if (pitch >= pitchThreshold && _confirmedYaw <= -yawThreshold + 2f)
                 {
                     Debug.Log($"✔ Step 6: Left Dix-Hallpike position (P:{pitch:F1}° Y:{_confirmedYaw:F1}°)");
-                    instructionManager.CompleteStepFromArduino();
+                    instructionManager.CompleteStep();
                 }
                 else if (pitch > 5f)
                     Debug.Log($"[Step 6] Progress: pitch={pitch:F1}° / {pitchThreshold}° yaw={_confirmedYaw:F1}°");
@@ -288,7 +289,7 @@ public class ArduinoSerialReader : MonoBehaviour
                     {
                         Debug.Log($"✔ Step 8: Neutral after left side (P:{pitch:F1}°)");
                         ResetHoldState();
-                        instructionManager.CompleteStepFromArduino();
+                        instructionManager.CompleteStep();
                     }
                     else
                         Debug.Log($"[Step 8] Upright but waiting for motor reversal. Phase:{CurrentPhase}");
@@ -332,7 +333,7 @@ public class ArduinoSerialReader : MonoBehaviour
                 _nystagmusTriggered = false;
                 _nystagmusTimer = 0f;
                 _triggerSent = false;
-                instructionManager.CompleteStepFromArduino();
+                instructionManager.CompleteStep();
             }
         }
     }
@@ -346,7 +347,7 @@ public class ArduinoSerialReader : MonoBehaviour
         {
             Debug.Log($"✔ Step {step} complete: No nystagmus on unaffected side");
             _noNystagmusHoldTimer = 0f;
-            instructionManager.CompleteStepFromArduino();
+            instructionManager.CompleteStep();
         }
     }
 

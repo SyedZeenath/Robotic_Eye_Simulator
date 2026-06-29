@@ -168,7 +168,7 @@ public class ArduinoHeadTracker : MonoBehaviour
                 if (Mathf.Abs(yaw) < 10f && Mathf.Abs(pitch) < 10f)
                 {
                     Debug.Log($"✔ Step 0 complete: Neutral position confirmed (yaw:{yaw:F1}°, pitch:{pitch:F1}°)");
-                    instructionManager.CompleteStepFromArduino();
+                    instructionManager.CompleteStep();
                 }
                 break;
 
@@ -180,7 +180,7 @@ public class ArduinoHeadTracker : MonoBehaviour
                 if (yaw >= yawThreshold)
                 {
                     Debug.Log($"✔ Step 1 complete: Head rotated 45° (yaw:{yaw:F1}°)");
-                    instructionManager.CompleteStepFromArduino();
+                    instructionManager.CompleteStep();
                 }
                 else if (yaw > 10f) // Show progress
                 {
@@ -196,7 +196,7 @@ public class ArduinoHeadTracker : MonoBehaviour
                 if (pitch >= pitchThreshold && yaw >= yawThreshold)
                 {
                     Debug.Log($"✔ Step 2 complete: Supine position (pitch:{pitch:F1}°, yaw:{yaw:F1}°)");
-                    instructionManager.CompleteStepFromArduino();
+                    instructionManager.CompleteStep();
                 }
                 else if (pitch > 5f)  // Show progress
                 {
@@ -237,7 +237,7 @@ public class ArduinoHeadTracker : MonoBehaviour
                         if (nystagmusTimer >= nystagmusDuration)
                         {
                             Debug.Log($"✔ Step 3 complete: Nystagmus completed ({nystagmusTimer:F1}s)");
-                            instructionManager.CompleteStepFromArduino();
+                            instructionManager.CompleteStep();
                         }
                         else
                         {
@@ -265,7 +265,7 @@ public class ArduinoHeadTracker : MonoBehaviour
                 if (Mathf.Abs(pitch) < 15f)  // Only check pitch - yaw drifts
                 {
                     Debug.Log($"✔ Step 4 complete: Returned to upright (pitch:{pitch:F1}°)");
-                    instructionManager.CompleteStepFromArduino();
+                    instructionManager.CompleteStep();
                 }
                 else if (Mathf.Abs(pitch) < 30f)  // Show progress
                 {
