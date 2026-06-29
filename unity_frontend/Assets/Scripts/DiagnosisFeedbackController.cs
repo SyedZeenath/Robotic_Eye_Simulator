@@ -14,6 +14,9 @@ public class DiagnosisFeedbackController : MonoBehaviour
     public GameObject feedbackPanel;
     public TextMeshProUGUI feedbackTitleText;
     public TextMeshProUGUI feedbackBodyText;
+    
+    [Header("Recording Indicator")]
+    public RecordingIndicator recordingIndicator;
 
     [Header("Timing")]
     public float postTTSDelay = 0.8f;
@@ -120,17 +123,31 @@ public class DiagnosisFeedbackController : MonoBehaviour
 
     IEnumerator DiagnosisCoroutine()
     {
-        feedbackPanel.SetActive(false);
+        feedbackTitleText.text = "Listening...";
+        feedbackBodyText.text  = "Please speak your diagnosis clearly.";
+        feedbackTitleText.color = new Color(1f, 1f, 1f);  // white for listening
+        feedbackPanel.SetActive(true);
 
         tts.SpeakOnDemand("What type of BPPV is your diagnosis?");
         yield return new WaitWhile(() => tts.IsSpeaking);
         yield return new WaitForSeconds(postTTSDelay);
+
+        // Start recording indicator then mic
+        if (recordingIndicator != null)
+            recordingIndicator.StartRecording();
 
         recorder.StartRecording();
     }
 
     void OnRecordingDone(byte[] wav)
     {
+        if (recordingIndicator != null)
+            recordingIndicator.StopRecording();
+
+        // Update panel text while STT runs
+        feedbackTitleText.text  = "Processing...";
+        feedbackBodyText.text   = "Analysing your response.";
+
         _lastRecording = wav;
         StartCoroutine(TranscribeAndEvaluate(wav));
     }
@@ -189,6 +206,5 @@ public class DiagnosisFeedbackController : MonoBehaviour
             ? new Color(0.11f, 0.60f, 0.35f) // green
             : new Color(0.78f, 0.20f, 0.20f); // red
 
-        feedbackPanel.SetActive(true);
     }
 }

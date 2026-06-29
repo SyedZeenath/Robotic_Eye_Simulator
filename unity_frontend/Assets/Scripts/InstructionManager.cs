@@ -62,10 +62,6 @@ public class InstructionManager : MonoBehaviour
             instructionText = "Return the patient to the upright sitting position.",
             isCompleted = false
         });
-        steps.Add(new InstructionStep {
-            instructionText = "Assessment complete. Please provide your diagnosis.",
-            isCompleted = false
-        });
     }
 
     public void UpdateUI()
@@ -137,7 +133,7 @@ public class InstructionManager : MonoBehaviour
             }
             else
             {
-                // All 10 steps complete — trigger diagnosis
+                // All 10 steps complete, trigger diagnosis flow
                 instructionTextUI.text = "Assessment complete. Please give your diagnosis.";
                 Debug.Log("[InstructionManager] All steps complete - triggering diagnosis flow");
 
