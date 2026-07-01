@@ -370,6 +370,11 @@ void checkSerialCommands() {
                     allNeutral();
                     Serial.println("Motors neutral");
                 }
+                else if (serialBuffer == "RESET") {
+                    mpu.resetFIFO();
+                    allNeutral();
+                    Serial.println("RESET_OK");
+                }
             }
             serialBuffer = "";
         }
@@ -385,7 +390,19 @@ void checkSerialCommands() {
 // **********************************************
 void readIMU() {
     if (!dmpReady) return;
+
+    uint16_t fifoCount = mpu.getFIFOCount();
+
+    if (fifoCount == 1024) {
+        mpu.resetFIFO();
+        return;
+    }
+
     if (!mpu.dmpGetCurrentFIFOPacket(fifoBuffer)) return;
+
+    // Discard extra packets so FIFO never accumulates
+    while (mpu.getFIFOCount() >= packetSize)
+        mpu.getFIFOBytes(fifoBuffer, packetSize);
 
     mpu.dmpGetQuaternion(&q, fifoBuffer);
 
@@ -396,8 +413,7 @@ void readIMU() {
 
     // Pitch - rotation around X axis (forward/back tilt)
     // Uses atan2 which handles all quadrants correctly
-    float sinp = 2.0 * (w * y - z * x);
-    sinp = constrain(sinp, -1.0, 1.0); // clamp to avoid asin domain error
+    float sinp = constrain(2.0 * (w * y - z * x), -1.0, 1.0);
     headPitch = asin(sinp) * 180.0 / M_PI;
 
     // Roll - rotation around Y axis
@@ -507,20 +523,32 @@ void setup() {
     }
 }
 
+void restartDMP() {
+    mpu.setDMPEnabled(false);
+    delay(50);
+    mpu.resetFIFO();
+    delay(50);
+    mpu.setDMPEnabled(true);
+    packetSize = mpu.dmpGetFIFOPacketSize();
+    Serial.println("DMP restarted");
+}
 // **********************************************
 // LOOP
 // **********************************************
 void loop() {
-    // Watchdog - if no message from Unity for 5 seconds, flush buffer
-    if (millis() - lastUnityPing > 5000 && unityConnected) {
-        while (Serial.available()) Serial.read();
-        serialBuffer = "";
-        unityConnected = false;
-        Serial.println("Unity disconnected — buffer flushed");
+    checkSerialCommands();
+
+    // Drain FIFO silently when no serial activity
+    // Prevents 20-30 min overflow without touching DMP state
+    if (!SKIP_IMU_TEST) {
+        uint16_t count = mpu.getFIFOCount();
+        if (count >= 1024) {
+            mpu.resetFIFO();
+            return;
+        }
+        readIMU();
     }
 
-    checkSerialCommands();
-    if (!SKIP_IMU_TEST) readIMU();
     if (motorRunning) runMotorStep();
 
     static unsigned long lastBroadcast = 0;

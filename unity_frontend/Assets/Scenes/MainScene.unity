@@ -187,8 +187,8 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   headTransform: {fileID: 66094271}
-  leftEye: {fileID: 1422530040}
-  rightEye: {fileID: 1434139247}
+  leftEye: {fileID: 1434139247}
+  rightEye: {fileID: 1422530040}
   vorGain: 0.9
   maxSlowPhaseVelocity: 25
   riseTime: 1
@@ -358,6 +358,8 @@ MonoBehaviour:
   noNystagmusHoldTime: 5
   activeBppvSide: right
   activeBppvType: posterior
+  fastLieBackThreshold: 15
+  acceptableLieBackThreshold: 8
   showDebugLog: 0
 --- !u!114 &213066074
 MonoBehaviour:
@@ -3147,7 +3149,7 @@ PrefabInstance:
     m_Modifications:
     - target: {fileID: 166794, guid: e48ade8ddad7caf40a92f30d869204e3, type: 3}
       propertyPath: m_Name
-      value: RightEye
+      value: LeftEye
       objectReference: {fileID: 0}
     - target: {fileID: 482452, guid: e48ade8ddad7caf40a92f30d869204e3, type: 3}
       propertyPath: m_LocalScale.x
@@ -3417,7 +3419,7 @@ PrefabInstance:
     m_Modifications:
     - target: {fileID: 166794, guid: e48ade8ddad7caf40a92f30d869204e3, type: 3}
       propertyPath: m_Name
-      value: LeftEye
+      value: RightEye
       objectReference: {fileID: 0}
     - target: {fileID: 482452, guid: e48ade8ddad7caf40a92f30d869204e3, type: 3}
       propertyPath: m_LocalScale.x

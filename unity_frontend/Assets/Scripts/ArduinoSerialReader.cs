@@ -33,9 +33,14 @@ public class ArduinoSerialReader : MonoBehaviour
     public float noNystagmusHoldTime = 5.0f;  // hold time on unaffected side
 
     // ********* BPPV info (set from patient data) *****************************
-    [Header("BPPV Side - set from patient data")]
-    public string activeBppvSide = "right"; // "right" or "left"
-    public string activeBppvType = "posterior"; // "posterior", "horizontal", "anterior"
+    [Header("BPPV Side")]
+    public string activeBppvSide = "right";
+    public string activeBppvType = "posterior";
+
+    // ********* Lie-back speed thresholds ****************************************
+    [Header("Lie-Back Speed")]
+    public float fastLieBackThreshold = 15f;
+    public float acceptableLieBackThreshold = 8f;
 
     // ********* Debug *******************************************************
     [Header("Debug")]
@@ -65,18 +70,25 @@ public class ArduinoSerialReader : MonoBehaviour
 
     private Quaternion _targetRotation = Quaternion.identity;
 
-    // ********* Step 3 state **********************************************
-    // Shared across all steps
-    private float _lastYaw;
-    private float _lastPitch;
+    // ********* Pitch velocity ***************************************************
+    private float _prevPitch = 0f;
+    private float _prevPitchTime = 0f;
+    private float _peakPitchVelocity = 0f;
+    private float[] _pitchVelocityBuffer = new float[5];
+    private int _pvBufferIndex = 0;
+    private float _smoothedPitchVelocity = 0f;
+
+    // ********* Step state ***************************************************
+    private float _lastYaw = 0f;
+    private float _lastPitch = 0f;
     private float _confirmedYaw = 0f;
-    // Step 3 and 7 - nystagmus / no-nystagmus hold
+
     private bool _nystagmusTriggered = false;
     private float _nystagmusTimer = 0f;
     private bool _triggerSent = false;
     private float _triggerSentTime = 0f;
-    private const float MIN_NYSTAGMUS_TIME = 5f;
     private float _noNystagmusHoldTimer = 0f;
+    private const float MIN_NYSTAGMUS_TIME = 5f;
 
     // ********* Frame struct **********************************************
     private struct CombinedFrame
@@ -94,15 +106,14 @@ public class ArduinoSerialReader : MonoBehaviour
 
     void Update()
     {
-        // Check if port is open under lock
+        // One quick lock just to read the bool - never hold across calls
         bool portOpen;
         lock (_serialLock) { portOpen = _serial != null && _serial.IsOpen; }
         if (!portOpen) return;
 
         IsReceivingData = (Time.time - _lastReceiveTime) < WATCHDOG_TIMEOUT;
 
-        // Drain queue - keep only the latest frame, discard stale ones
-        // This prevents Unity from processing hundreds of backed-up frames
+        // Drain queue on main thread - ConcurrentQueue needs no lock
         CombinedFrame latest = default;
         bool hasNew = false;
         while (_frameQueue.TryDequeue(out CombinedFrame frame))
@@ -138,8 +149,8 @@ public class ArduinoSerialReader : MonoBehaviour
 
             if (showDebugLog)
                 Debug.Log($"[Serial] Y:{latest.yaw:F1} P:{latest.pitch:F1} R:{latest.roll:F1} " +
-                          $"| T:{latest.torsion:F1} V:{latest.vertical:F1} H:{latest.horizontal:F1} " +
-                          $"P:{latest.phase}");
+                          $"T:{latest.torsion:F1} V:{latest.vertical:F1} H:{latest.horizontal:F1} " +
+                          $"Ph:{latest.phase}");
         }
 
         if (_hasFreshReading)
@@ -165,7 +176,6 @@ public class ArduinoSerialReader : MonoBehaviour
     private void CheckStepConditions(float yaw, float pitch, float roll)
     {
         if (instructionManager == null) return;
-
         int step = instructionManager.currentStepIndex;
         if (step < 0) return;
 
@@ -178,6 +188,19 @@ public class ArduinoSerialReader : MonoBehaviour
 
         if (instructionManager.tts != null && instructionManager.tts.IsSpeaking)
             return;
+
+        // Smoothed pitch velocity - computed every frame on main thread
+        float dt = Mathf.Max(Time.time - _prevPitchTime, 0.001f);
+        float rawVelocity = (pitch - _prevPitch) / dt;
+        _prevPitch = pitch;
+        _prevPitchTime = Time.time;
+
+        _pitchVelocityBuffer[_pvBufferIndex % 5] = rawVelocity;
+        _pvBufferIndex++;
+        _smoothedPitchVelocity = 0f;
+        foreach (float v in _pitchVelocityBuffer)
+            _smoothedPitchVelocity += v;
+        _smoothedPitchVelocity /= 5f;
 
         switch (step)
         {
@@ -204,9 +227,14 @@ public class ArduinoSerialReader : MonoBehaviour
 
             // Step 2: Lie back with head turned right
             case 2:
+                if (_smoothedPitchVelocity > 0f)
+                    _peakPitchVelocity = Mathf.Max(_peakPitchVelocity, _smoothedPitchVelocity);
+
                 if (pitch >= pitchThreshold && _confirmedYaw >= yawThreshold - 2f)
                 {
-                    Debug.Log($"✔ Step 2: Right Dix-Hallpike position (P:{pitch:F1}° Y:{_confirmedYaw:F1}°)");
+                    EvaluateLieBackSpeed(_peakPitchVelocity, step);
+                    _peakPitchVelocity = 0f;
+                    Debug.Log($"✔ Step 2: Right Dix-Hallpike (P:{pitch:F1}° Y:{_confirmedYaw:F1}°)");
                     instructionManager.CompleteStep();
                 }
                 else if (pitch > 5f)
@@ -230,15 +258,15 @@ public class ArduinoSerialReader : MonoBehaviour
             case 4:
                 if (Mathf.Abs(pitch) < 15f && Mathf.Abs(yaw) < 20f)
                 {
-                    bool motorsSettled = activeBppvSide == "right" ? CurrentPhase == 0 : true;
-                    if (motorsSettled)
+                    bool settled = activeBppvSide == "right" ? CurrentPhase == 0 : true;
+                    if (settled)
                     {
-                        Debug.Log($"✔ Step 4: Neutral after right side (P:{pitch:F1}°)");
+                        Debug.Log($"✔ Step 4: Neutral after right (P:{pitch:F1}°)");
                         ResetHoldState();
                         instructionManager.CompleteStep();
                     }
                     else
-                        Debug.Log($"[Step 4] Upright but waiting for motor reversal. Phase:{CurrentPhase}");
+                        Debug.Log($"[Step 4] Waiting for motor reversal. Phase:{CurrentPhase}");
                 }
                 else if (Mathf.Abs(pitch) < 30f)
                     Debug.Log($"[Step 4] Returning... pitch={pitch:F1}°");
@@ -253,18 +281,23 @@ public class ArduinoSerialReader : MonoBehaviour
                     instructionManager.CompleteStep();
                 }
                 else if (yaw < -10f)
-                    Debug.Log($"[Step 5] Progress: yaw={yaw:F1}° / -{yawThreshold}°");
+                    Debug.Log($"[Step 5] yaw={yaw:F1}° / -{yawThreshold}°");
                 break;
 
             // Step 6: Lie back with head turned left
             case 6:
+                if (_smoothedPitchVelocity > 0f)
+                    _peakPitchVelocity = Mathf.Max(_peakPitchVelocity, _smoothedPitchVelocity);
+
                 if (pitch >= pitchThreshold && _confirmedYaw <= -yawThreshold + 2f)
                 {
-                    Debug.Log($"✔ Step 6: Left Dix-Hallpike position (P:{pitch:F1}° Y:{_confirmedYaw:F1}°)");
+                    EvaluateLieBackSpeed(_peakPitchVelocity, step);
+                    _peakPitchVelocity = 0f;
+                    Debug.Log($"✔ Step 6: Left Dix-Hallpike (P:{pitch:F1}° Y:{_confirmedYaw:F1}°)");
                     instructionManager.CompleteStep();
                 }
                 else if (pitch > 5f)
-                    Debug.Log($"[Step 6] Progress: pitch={pitch:F1}° / {pitchThreshold}° yaw={_confirmedYaw:F1}°");
+                    Debug.Log($"[Step 6] pitch={pitch:F1}° spd={_smoothedPitchVelocity:F1}°/s peak={_peakPitchVelocity:F1}°/s");
                 break;
 
             // Step 7: Hold left position and observe
@@ -284,15 +317,15 @@ public class ArduinoSerialReader : MonoBehaviour
             case 8:
                 if (Mathf.Abs(pitch) < 15f && Mathf.Abs(yaw) < 20f)
                 {
-                    bool motorsSettled = activeBppvSide == "left" ? CurrentPhase == 0 : true;
-                    if (motorsSettled)
+                    bool settled = activeBppvSide == "left" ? CurrentPhase == 0 : true;
+                    if (settled)
                     {
-                        Debug.Log($"✔ Step 8: Neutral after left side (P:{pitch:F1}°)");
+                        Debug.Log($"✔ Step 8: Neutral after left (P:{pitch:F1}°)");
                         ResetHoldState();
                         instructionManager.CompleteStep();
                     }
                     else
-                        Debug.Log($"[Step 8] Upright but waiting for motor reversal. Phase:{CurrentPhase}");
+                        Debug.Log($"[Step 8] Waiting for motor reversal. Phase:{CurrentPhase}");
                 }
                 else if (Mathf.Abs(pitch) < 30f)
                     Debug.Log($"[Step 8] Returning... pitch={pitch:F1}°");
@@ -304,13 +337,13 @@ public class ArduinoSerialReader : MonoBehaviour
         }
     }
 
+    // ********* NYSTAGMUS HELPERS **************************************************
     private void HandleNystagmusSide()
     {
         int step = instructionManager.currentStepIndex;
         if (!_nystagmusTriggered)
         {
             _nystagmusTimer += Time.deltaTime;
-            Debug.Log($"[Step {step}] Holding affected side... {_nystagmusTimer:F1}s / {holdBeforeTrigger}s");
             if (_nystagmusTimer >= holdBeforeTrigger)
             {
                 _nystagmusTriggered = true;
@@ -325,9 +358,9 @@ public class ArduinoSerialReader : MonoBehaviour
         else
         {
             bool minTimePassed = (Time.time - _triggerSentTime) >= MIN_NYSTAGMUS_TIME;
-            bool motorsAtReversal = CurrentPhase == 5;
-            Debug.Log($"[Step {step}] Nystagmus active Phase:{CurrentPhase} MinTime:{minTimePassed}");
-            if (_triggerSent && minTimePassed && motorsAtReversal)
+            bool atReversal = CurrentPhase == 5;
+            Debug.Log($"[Step {step}] Phase:{CurrentPhase} MinTime:{minTimePassed}");
+            if (_triggerSent && minTimePassed && atReversal)
             {
                 Debug.Log($"✔ Step {step} complete: Nystagmus finished");
                 _nystagmusTriggered = false;
@@ -342,7 +375,7 @@ public class ArduinoSerialReader : MonoBehaviour
     {
         int step = instructionManager.currentStepIndex;
         _noNystagmusHoldTimer += Time.deltaTime;
-        Debug.Log($"[Step {step}] Unaffected side holding... {_noNystagmusHoldTimer:F1}s / {noNystagmusHoldTime}s");
+        Debug.Log($"[Step {step}] Unaffected hold {_noNystagmusHoldTimer:F1}s / {noNystagmusHoldTime}s");
         if (_noNystagmusHoldTimer >= noNystagmusHoldTime)
         {
             Debug.Log($"✔ Step {step} complete: No nystagmus on unaffected side");
@@ -359,6 +392,28 @@ public class ArduinoSerialReader : MonoBehaviour
         _triggerSentTime = 0f;
         _noNystagmusHoldTimer = 0f;
     }
+
+    private void EvaluateLieBackSpeed(float peakSpeed, int step)
+    {
+        string side = (step == 2) ? "right" : "left";
+        if (peakSpeed >= fastLieBackThreshold)
+        {
+            Debug.Log($"[Step {step}] Lie-back FAST: {peakSpeed:F1}°/s");
+        }
+        else if (peakSpeed >= acceptableLieBackThreshold)
+        {
+            Debug.Log($"[Step {step}] Lie-back ACCEPTABLE: {peakSpeed:F1}°/s");
+            instructionManager.tts?.SpeakOnDemand(
+                $"Tip: try to lower the patient slightly faster on the {side} side next time.");
+        }
+        else
+        {
+            Debug.Log($"[Step {step}] Lie-back TOO SLOW: {peakSpeed:F1}°/s");
+            instructionManager.tts?.SpeakOnDemand(
+                $"The repositioning on the {side} side was too slow. This may reduce the nystagmus response.");
+        }
+    }
+
     // ------------------------------------------------------------------
     // SERIAL PORT
     // ------------------------------------------------------------------
@@ -368,19 +423,18 @@ public class ArduinoSerialReader : MonoBehaviour
         {
             try
             {
-                // Fully dispose any existing port before creating new one
                 if (_serial != null)
                 {
-                    if (_serial.IsOpen) _serial.Close();
-                    _serial.Dispose();
+                    try { if (_serial.IsOpen) _serial.Close(); } catch { }
+                    try { _serial.Dispose(); } catch { }
                     _serial = null;
                 }
 
                 _serial = new SerialPort(portName, baudRate)
                 {
-                    ReadTimeout = 500, // 500ms - never blocks the thread forever
+                    ReadTimeout = 500,
                     WriteTimeout = 500,
-                    DtrEnable = false // prevents Arduino reset on connect
+                    DtrEnable = false
                 };
                 _serial.Open();
 
@@ -389,7 +443,8 @@ public class ArduinoSerialReader : MonoBehaviour
                 _serial.DiscardInBuffer();
                 _serial.DiscardOutBuffer();
 
-                Debug.Log($"✓ Serial connected to {portName} at {baudRate} baud");
+                Thread.Sleep(200); // Give Arduino time to reset and stabilise
+                Debug.Log($"✓ Serial connected to {portName} at {baudRate}");
             }
             catch (Exception e)
             {
@@ -406,11 +461,11 @@ public class ArduinoSerialReader : MonoBehaviour
     }
 
     private void ReadLoop()
-{
-    while (_running)
     {
-        try
+        Debug.Log("[Serial] ReadLoop started");
+        while (_running)
         {
+            // Quick lock just to check open state - never hold across ReadLine
             bool portOpen;
             lock (_serialLock) { portOpen = _serial != null && _serial.IsOpen; }
 
@@ -421,93 +476,109 @@ public class ArduinoSerialReader : MonoBehaviour
                 continue;
             }
 
-            // ReadLine outside the lock - blocking call must never hold the lock
-            string line = _serial.ReadLine().Trim();
+            string line = null;
 
-            if (string.IsNullOrEmpty(line)) continue;
-
-            if (line.Contains("Calibration") || line.Contains("MPU") ||
-                line.Contains("DMP") || line.Contains("Offsets") ||
-                line.Contains("Waiting") || line.Contains("Ready") ||
-                line.Contains("CMD:") || line.Contains("PHASE:") ||
-                line.Contains("BPPV") || line.Contains("Motors"))
+            // ReadLine is completely outside any lock
+            // If it blocks for ReadTimeout ms, the lock is FREE the whole time
+            try
             {
-                Debug.Log($"[Arduino] {line}");
+                line = _serial.ReadLine();
+                if (showDebugLog && line != null)
+                {
+                    Debug.Log($"[Serial RAW] {line.Trim()}");
+                }
+            }
+            catch (TimeoutException)
+            {
+                // Normal — no data for 500ms, just loop
+                continue;
+            }
+            catch (InvalidOperationException)
+            {
+                // Port was closed from another thread mid-read
+                Thread.Sleep(2000);
+                TryReconnect();
+                continue;
+            }
+            catch (Exception e)
+            {
+                if (!_running) break;
+                Debug.LogWarning($"[Serial] Read error: {e.Message}");
+                Thread.Sleep(100);
                 continue;
             }
 
-            if (!line.StartsWith("H:")) continue;
+            if (string.IsNullOrWhiteSpace(line)) continue;
 
-            if (TryParseLine(line, out CombinedFrame frame))
+            string trimmed = line.Trim();
+
+            // Pass Arduino startup messages to console and skip
+            if (!trimmed.StartsWith("H:"))
+            {
+                if (showDebugLog) Debug.Log($"[Arduino] {trimmed}");
+                continue;
+            }
+
+            if (TryParseLine(trimmed, out CombinedFrame frame))
             {
                 _frameQueue.Enqueue(frame);
+                // Cap queue - ConcurrentQueue is thread-safe, no lock needed
                 while (_frameQueue.Count > 50)
                     _frameQueue.TryDequeue(out _);
             }
         }
-        catch (TimeoutException) { }
-        catch (ThreadAbortException) { break; }
-        catch (Exception e)
-        {
-            if (!_running) break;
 
-            bool portOpen;
-            lock (_serialLock) { portOpen = _serial != null && _serial.IsOpen; }
-
-            if (!portOpen)
-            {
-                Debug.LogWarning($"[Serial] Port closed: {e.Message}");
-                Thread.Sleep(2000);
-                TryReconnect();
-            }
-            else if (showDebugLog)
-                Debug.LogWarning($"[Serial] Read warning: {e.Message}");
-        }
+        Debug.Log("[Serial] ReadLoop exited.");
     }
-    Debug.Log("ReadLoop exited");
-}
 
     private void TryReconnect()
     {
         Debug.Log("[Serial] Attempting reconnect...");
+
+        // Step 1: Grab the old port reference and null _serial atomically
+        // This keeps the lock duration to microseconds
+        SerialPort old = null;
         lock (_serialLock)
         {
-            try
-            {
-                // Fully dispose - reusing a closed SerialPort object is unreliable on Windows
-                if (_serial != null)
-                {
-                    try { if (_serial.IsOpen) _serial.Close(); } catch { }
-                    try { _serial.Dispose(); } catch { }
-                    _serial = null;
-                }
-
-                Thread.Sleep(500);
-
-                _serial = new SerialPort(portName, baudRate)
-                {
-                    ReadTimeout = 500,
-                    WriteTimeout = 500,
-                    DtrEnable = false
-                };
-                _serial.Open();
-
-                Thread.Sleep(150);
-                _serial.DiscardInBuffer();
-                _serial.DiscardOutBuffer();
-
-                Debug.Log("[Serial] Reconnected successfully.");
-            }
-            catch (Exception e)
-            {
-                Debug.LogWarning($"[Serial] Reconnect failed: {e.Message} - will retry in 2s");
-                if (_serial != null)
-                {
-                    try { _serial.Dispose(); } catch { }
-                    _serial = null;
-                }
-            }
+            old = _serial;
+            _serial = null;
         }
+
+        // Step 2: Dispose the old port OUTSIDE the lock
+        // This can take time on Windows — we must not hold the lock here
+        if (old != null)
+        {
+            try { old.Close(); } catch { }
+            try { old.Dispose(); } catch { }
+        }
+
+        Thread.Sleep(500);
+
+        // Step 3: Create and open the new port OUTSIDE the lock
+        SerialPort next = null;
+        try
+        {
+            next = new SerialPort(portName, baudRate)
+            {
+                ReadTimeout = 500,
+                WriteTimeout = 500,
+                DtrEnable = false
+            };
+            next.Open();
+            Thread.Sleep(150);
+            next.DiscardInBuffer();
+            Thread.Sleep(200); // Give Arduino time to reset and stabilise
+            Debug.Log("[Serial] Reconnected.");
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning($"[Serial] Reconnect failed: {e.Message}");
+            try { next?.Dispose(); } catch { }
+            next = null;
+        }
+
+        // Step 4: Assign the new port atomically — lock is only held for assignment
+        lock (_serialLock) { _serial = next; }
     }
 
     private void ClosePort()
@@ -540,66 +611,73 @@ public class ArduinoSerialReader : MonoBehaviour
         frame = default;
         try
         {
+            var culture = System.Globalization.CultureInfo.InvariantCulture;
+
             string[] sections = line.Split('|');
             if (sections.Length < 2) return false;
 
-            // Head section: H:yaw,pitch,roll
             string[] h = sections[0].Substring(2).Split(',');
             if (h.Length < 3) return false;
-            frame.yaw = float.Parse(h[0]);
-            frame.pitch = float.Parse(h[1]);
-            frame.roll = float.Parse(h[2]);
+            frame.yaw = float.Parse(h[0], culture);
+            frame.pitch = float.Parse(h[1], culture);
+            frame.roll = float.Parse(h[2], culture);
 
-            // Eye section: T:val,V:val,H:val,P:val,S:R
-            // Split by comma then extract value after colon for each field
-            // S field is ignored — side is managed by patient JSON not Arduino broadcast
             string[] e = sections[1].Split(',');
             if (e.Length < 4) return false;
-
-            frame.torsion = float.Parse(e[0].Split(':')[1]);
-            frame.vertical = float.Parse(e[1].Split(':')[1]);
-            frame.horizontal = float.Parse(e[2].Split(':')[1]);
+            frame.torsion = float.Parse(e[0].Split(':')[1], culture);
+            frame.vertical = float.Parse(e[1].Split(':')[1], culture);
+            frame.horizontal = float.Parse(e[2].Split(':')[1], culture);
             frame.phase = int.Parse(e[3].Split(':')[1]);
-            // e[4] is S:R or S:L - deliberately ignored here
 
             return true;
         }
-        catch { return false; }
-}
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"[Parse] Failed: {ex.Message} on line: {line}");
+            return false;
+        }
+    }
 
     // ------------------------------------------------------------------
     // PUBLIC API
     // ------------------------------------------------------------------
     public void SendCommand(string cmd)
     {
+        // Lock only for the Write — never during ReadLine
         lock (_serialLock)
         {
-            if (_serial != null && _serial.IsOpen)
+            if (_serial == null || !_serial.IsOpen)
+            {
+                Debug.LogWarning("[Serial] Cannot send — port not open.");
+                return;
+            }
+            try
             {
                 _serial.WriteLine(cmd);
                 Debug.Log($"[Serial] Sent: {cmd}");
             }
-            else
-                Debug.LogWarning("[Serial] Cannot send — port not open.");
+            catch (Exception e)
+            {
+                Debug.LogWarning($"[Serial] Send failed: {e.Message}");
+            }
         }
-    }
-
-    public void TriggerBPPV() { SendCommand("TRIGGER"); }
-    public void TriggerNeutral() { SendCommand("NEUTRAL"); }
-
-    public void ResetBPPVState()
-    {
-        _hasFreshReading = false;
-        _nystagmusTriggered = false;
-        _nystagmusTimer = 0f;
-        _triggerSent = false;
-        _triggerSentTime = 0f;
     }
 
     public void SetPatientBPPVInfo(string side, string type)
     {
         activeBppvSide = side.ToLower().Trim();
         activeBppvType = type.ToLower().Trim();
-        Debug.Log($"[Serial] BPPV set - side: {activeBppvSide}, type: {activeBppvType}");
+        ResetHoldState();
+        Debug.Log($"[Serial] BPPV set: side={activeBppvSide} type={activeBppvType}");
     }
+
+    public void ResetBPPVState()
+    {
+        _hasFreshReading = false;
+        _confirmedYaw = 0f;
+        ResetHoldState();
+    }
+
+    public void TriggerBPPV() { SendCommand("TRIGGER"); }
+    public void TriggerNeutral() { SendCommand("NEUTRAL"); }
 }
