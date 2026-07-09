@@ -112,25 +112,11 @@ public class RealisticEyeController : MonoBehaviour
             ? -headVelocity * vorGain
             : Vector3.zero;
 
-        // Direct nystagmus offset from physical motor angles
-        // X = vertical (pitch), Y = horizontal (yaw), Z = torsion (roll)
-        Vector3 nystagmusOffset = new Vector3(
-            _smoothHorizontal, // X = left/right
-            _smoothVertical, // Y = up/down
-            _smoothTorsion // Z = torsion
-        );
+        Vector3 rightOffset = vor + new Vector3(_smoothHorizontal, _smoothVertical, -_smoothTorsion);
+        Vector3 leftOffset  = vor + new Vector3(_smoothHorizontal, _smoothVertical,  _smoothTorsion);
 
-        // Combine VOR with physical nystagmus
-        Vector3 finalRotation = vor + nystagmusOffset;
-
-        if (_activeBppvSide == "left")
-        {
-            leftEye.localRotation = Quaternion.Euler(finalRotation);
-        }
-        else
-        {
-            rightEye.localRotation = Quaternion.Euler(finalRotation);
-        }
+        rightEye.localRotation = Quaternion.Euler(rightOffset);
+        leftEye.localRotation  = Quaternion.Euler(leftOffset);
     }
 
     // ------------------------------------------------------------------------

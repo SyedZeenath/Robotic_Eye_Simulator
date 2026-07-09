@@ -5,8 +5,6 @@
  * Right eye: CH0=horizontal, CH1=vertical, CH2=torsion
  * Left eye:  CH4=horizontal, CH5=vertical, CH6=torsion
  *
- * R or TRIGGER → right posterior BPPV (right eye only, left eye neutral)
- * L            → left posterior BPPV  (left eye only, right eye neutral)
  * Both eyes move with mirror effect — horizontal and torsion signs flip
  * N or NEUTRAL → all motors neutral
  */
@@ -159,9 +157,16 @@ uint16_t angleToPulse(float angle) {
     return (uint16_t)(PULSE_MIN + (angle / 180.0) * (PULSE_MAX - PULSE_MIN));
 }
 
-float eyeToServo(float eyeAngle, float gain) {
-    return constrain(SERVO_NEUTRAL + (eyeAngle * gain), (float)SERVO_MIN, (float)SERVO_MAX);
+float eyeToServo(float eyeAngle, float gain, float trim) {
+    return constrain(SERVO_NEUTRAL + trim + (eyeAngle * gain), (float)SERVO_MIN, (float)SERVO_MAX);
 }
+
+#define TRIM_R_TORSION 0.0f
+#define TRIM_L_TORSION 0.0f
+#define TRIM_R_VERTICAL 0.0f
+#define TRIM_L_VERTICAL 0.0f
+#define TRIM_R_HORIZONTAL 0.0f
+#define TRIM_L_HORIZONTAL 0.0f
 
 // **********************************************
 // writeAllMotors
@@ -174,24 +179,13 @@ float eyeToServo(float eyeAngle, float gain) {
 // Left BPPV:  left eye = primary
 // **********************************************
 void writeAllMotors() {
-    if (activeEye == 'R') {
-        pca.setPWM(R_CH_TORSION, 0, angleToPulse(eyeToServo(-eyeTorsion, GAIN_TORSION)));
-        pca.setPWM(R_CH_VERTICAL, 0, angleToPulse(eyeToServo(eyeVertical, GAIN_VERTICAL)));
-        pca.setPWM(R_CH_HORIZONTAL, 0, angleToPulse(eyeToServo(eyeHorizontal, GAIN_HORIZONTAL)));
+    pca.setPWM(R_CH_TORSION, 0, angleToPulse(eyeToServo(-eyeTorsion, GAIN_TORSION, TRIM_R_TORSION)));
+    pca.setPWM(R_CH_VERTICAL, 0, angleToPulse(eyeToServo(eyeVertical, GAIN_VERTICAL, TRIM_R_VERTICAL)));
+    pca.setPWM(R_CH_HORIZONTAL, 0, angleToPulse(eyeToServo(-eyeHorizontal, GAIN_HORIZONTAL, TRIM_R_HORIZONTAL)));
 
-        pca.setPWM(L_CH_TORSION, 0, PULSE_NEUTRAL);
-        pca.setPWM(L_CH_VERTICAL, 0, PULSE_NEUTRAL);
-        pca.setPWM(L_CH_HORIZONTAL, 0, PULSE_NEUTRAL);
-    }
-    else {
-        pca.setPWM(L_CH_TORSION, 0, angleToPulse(eyeToServo( eyeTorsion, GAIN_TORSION)));
-        pca.setPWM(L_CH_VERTICAL, 0, angleToPulse(eyeToServo( eyeVertical, GAIN_VERTICAL)));
-        pca.setPWM(L_CH_HORIZONTAL, 0, angleToPulse(eyeToServo( eyeHorizontal, GAIN_HORIZONTAL)));
-
-        pca.setPWM(R_CH_TORSION, 0, PULSE_NEUTRAL);
-        pca.setPWM(R_CH_VERTICAL, 0, PULSE_NEUTRAL);
-        pca.setPWM(R_CH_HORIZONTAL, 0, PULSE_NEUTRAL);
-    }
+    pca.setPWM(L_CH_TORSION, 0, angleToPulse(eyeToServo( eyeTorsion, GAIN_TORSION, TRIM_L_TORSION)));
+    pca.setPWM(L_CH_VERTICAL, 0, angleToPulse(eyeToServo( eyeVertical, GAIN_VERTICAL, TRIM_L_VERTICAL)));
+    pca.setPWM(L_CH_HORIZONTAL, 0, angleToPulse(eyeToServo( eyeHorizontal, GAIN_HORIZONTAL, TRIM_L_HORIZONTAL)));
 }
 
 void allNeutral() {
@@ -295,14 +289,16 @@ void runMotorStep() {
                 // Fast phase - snaps UPWARD + top tilts TOWARD affected ear
                 // This is the visible flick
                 float snapStep = BEAT_SNAP_SPEED * dt;
-                if (abs(eyeTorsion) > 0.5) eyeTorsion += eyeTorsion > 0 ? -snapStep : snapStep;
-                else eyeTorsion = 0.0;
-                if (abs(eyeVertical) > 0.5) eyeVertical += eyeVertical > 0 ? -snapStep : snapStep;
-                else eyeVertical = 0.0;
+                if (eyeTorsion > 0.0) eyeTorsion = max(0.0f, eyeTorsion - snapStep);
+                else if (eyeTorsion < 0.0) eyeTorsion = min(0.0f, eyeTorsion + snapStep);
+
+                if (eyeVertical > 0.0) eyeVertical = max(0.0f, eyeVertical - snapStep);
+                else if (eyeVertical < 0.0) eyeVertical = min(0.0f, eyeVertical + snapStep);
+
                 eyeHorizontal *= 0.85;
 
-                if (abs(eyeTorsion) <= 0.5 && abs(eyeVertical) <= 0.5) {
-                    eyeTorsion = 0.0; eyeVertical = 0.0; eyeHorizontal = 0.0;
+                if (fabs(eyeTorsion) <= 0.01 && fabs(eyeVertical) <= 0.01) {
+                    eyeHorizontal = 0.0;
                     beatState = BEAT_DRIFT;
                 }
             }
