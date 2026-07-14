@@ -30,11 +30,18 @@ uint16_t packetSize, fifoCount;
 uint8_t fifoBuffer[64];
 Quaternion q;
 VectorFloat gravity;
-float ypr[3];
 float yawOffset = 0, pitchOffset = 0, rollOffset = 0;
 const unsigned long stabilizationDelay = 15000;
 const int calibrationSamples = 100;
 float imuYaw = 0, imuPitch = 0, imuRoll = 0;
+float tiltFromVertical = 0;
+
+struct EulerAngles {
+    float pitch;
+    float roll;
+    float yaw;
+    float tilt;
+};
 
 // **********************************************
 // PCA9685
@@ -140,13 +147,13 @@ void broadcastState() {
     Serial.print("H:");
     Serial.print(imuYaw, 2); Serial.print(",");
     Serial.print(imuPitch, 2); Serial.print(",");
-    Serial.print(imuRoll, 2);
-    Serial.print("|T:");
+    Serial.print(imuRoll, 2); Serial.print("|T:");
     Serial.print(eyeTorsion, 2); Serial.print(",V:");
     Serial.print(eyeVertical, 2); Serial.print(",H:");
     Serial.print(eyeHorizontal, 2); Serial.print(",P:");
     Serial.print(currentPhase); Serial.print(",S:");
-    Serial.println(motorDir == 1 ? "R" : "L");
+    Serial.print(motorDir == 1 ? "R" : "L"); Serial.print(",X:");
+    Serial.println(tiltFromVertical, 2);
 }
 
 // **********************************************
@@ -384,6 +391,31 @@ void checkSerialCommands() {
 // **********************************************
 // IMU
 // **********************************************
+EulerAngles quaternionToEuler() {
+    // Extract angles directly from quaternion - no gimbal lock
+    // These formulas are the standard quaternion to Euler conversion
+    // but computed in a way that avoids the singularity at pitch=90
+    float w = q.w, x = q.x, y = q.y, z = q.z;
+    // Pitch - rotation around Y axis (forward/back tilt); Closed form conversion
+    float sinp = constrain(2.0 * (w * y - z * x), -1.0, 1.0);
+    float pitch = asin(sinp) * 180.0 / M_PI;
+    // Roll - rotation around X axis
+    float sinr = 2.0 * (w * x + y * z);
+    float cosr = 1.0 - 2.0 * (x * x + y * y);
+    float roll = atan2(sinr, cosr) * 180.0 / M_PI;
+    // Yaw - rotation around Z axis
+    // This still has gimbal lock near pitch=90 but for Dix-Hallpike
+    // the head never reaches 90 degrees pitch so it remains stable
+    float siny = 2.0 * (w * z + x * y);
+    float cosy = 1.0 - 2.0 * (y * y + z * z);
+    float yaw = atan2(siny, cosy) * 180.0 / M_PI;
+
+    float tilt = acos(constrain(1.0 - 2.0 * (x * x + y * y), -1.0, 1.0)) * 180.0 / M_PI;
+
+
+    return EulerAngles{pitch, roll, yaw, tilt};
+}
+
 void readIMU() {
     if (!dmpReady) return;
 
@@ -402,32 +434,13 @@ void readIMU() {
 
     mpu.dmpGetQuaternion(&q, fifoBuffer);
 
-    // Extract angles directly from quaternion - no gimbal lock
-    // These formulas are the standard quaternion to Euler conversion
-    // but computed in a way that avoids the singularity at pitch=90
-    float w = q.w, x = q.x, y = q.y, z = q.z;
+    EulerAngles angles = quaternionToEuler();
 
-    // Pitch - rotation around X axis (forward/back tilt)
-    // Uses atan2 which handles all quadrants correctly
-    float sinp = constrain(2.0 * (w * y - z * x), -1.0, 1.0);
-    headPitch = asin(sinp) * 180.0 / M_PI;
-
-    // Roll - rotation around Y axis
-    float sinr = 2.0 * (w * x + y * z);
-    float cosr = 1.0 - 2.0 * (x * x + y * y);
-    headRoll = atan2(sinr, cosr) * 180.0 / M_PI;
-
-    // Yaw - rotation around Z axis
-    // This still has gimbal lock near pitch=90 but for Dix-Hallpike
-    // the head never reaches 90 degrees pitch so it remains stable
-    float siny = 2.0 * (w * z + x * y);
-    float cosy = 1.0 - 2.0 * (y * y + z * z);
-    float rawYaw = atan2(siny, cosy) * 180.0 / M_PI;
 
     // Apply calibration offsets
-    headYaw = rawYaw - yawOffset;
-    headPitch = headPitch - pitchOffset;
-    headRoll = headRoll - rollOffset;
+    headYaw = angles.yaw - yawOffset;
+    headPitch = angles.pitch - pitchOffset;
+    headRoll = angles.roll - rollOffset;
 
     // Wrap yaw to -180 to 180
     if (headYaw > 180) headYaw -= 360;
@@ -436,7 +449,8 @@ void readIMU() {
     // Apply Kalman filter - reduces noise on all three axes
     imuYaw = kalYaw.update(headYaw);
     imuPitch = kalPitch.update(headPitch);
-    imuRoll = kalRoll.update(headRoll);
+    imuRoll = kalRoll.update(headRoll);    
+    tiltFromVertical = angles.tilt;
 }
 
 void calibrateSensor() {
@@ -444,22 +458,12 @@ void calibrateSensor() {
     for (int i = 0; i < calibrationSamples; i++) {
         if (mpu.dmpGetCurrentFIFOPacket(fifoBuffer)) {
             mpu.dmpGetQuaternion(&q, fifoBuffer);
-            float w = q.w, x = q.x, y = q.y, z = q.z;
 
-            float sinp = constrain(2.0*(w*y - z*x), -1.0, 1.0);
-            float pitch = asin(sinp) * 180.0 / M_PI;
+            EulerAngles angles = quaternionToEuler();
 
-            float sinr = 2.0*(w*x + y*z);
-            float cosr = 1.0 - 2.0*(x*x + y*y);
-            float roll = atan2(sinr, cosr) * 180.0 / M_PI;
-
-            float siny = 2.0*(w*z + x*y);
-            float cosy = 1.0 - 2.0*(y*y + z*z);
-            float yaw = atan2(siny, cosy) * 180.0 / M_PI;
-
-            yawSum += yaw;
-            pitchSum += pitch;
-            rollSum += roll;
+            yawSum += angles.yaw;
+            pitchSum += angles.pitch;
+            rollSum += angles.roll;
         }
         delay(10);
     }

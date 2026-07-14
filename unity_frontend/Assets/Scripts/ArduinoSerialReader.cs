@@ -26,6 +26,9 @@ public class ArduinoSerialReader : MonoBehaviour
     [Header("Dix-Hallpike Thresholds")]
     public float yawThreshold = 45f;
     public float pitchThreshold = 20f;
+    private bool _supineReached = false;
+    public float supineThreshold = 80f;
+    public float hangBelowSupine = 20f;
 
     // ********* Nystagmus timing ******************************************
     [Header("Nystagmus Timing")]
@@ -66,6 +69,7 @@ public class ArduinoSerialReader : MonoBehaviour
     private float _curYaw = 0f;
     private float _curPitch = 0f;
     private float _curRoll = 0f;
+    private float _curTilt = 0f;
     private bool _hasFreshReading = false;
 
     private Quaternion _targetRotation = Quaternion.identity;
@@ -96,6 +100,7 @@ public class ArduinoSerialReader : MonoBehaviour
         public float yaw, pitch, roll;
         public float torsion, vertical, horizontal;
         public int phase;
+        public float tilt;
     }
 
     // ********* UNITY LIFECYCLE *******************************************
@@ -131,6 +136,7 @@ public class ArduinoSerialReader : MonoBehaviour
             _curYaw = latest.yaw;
             _curPitch = latest.pitch;
             _curRoll = latest.roll;
+            _curTilt = latest.tilt;
 
             _targetRotation = Quaternion.Euler(
                 -latest.pitch * headRotationScale,
@@ -218,6 +224,7 @@ public class ArduinoSerialReader : MonoBehaviour
                 if (yaw >= yawThreshold - 2f && yaw <= yawThreshold + 15f)
                 {
                     _confirmedYaw = yaw;
+                    _supineReached = false;
                     Debug.Log($"✔ Step 1: Head turned right (Y:{yaw:F1}°)");
                     instructionManager.CompleteStep();
                 }
@@ -230,15 +237,27 @@ public class ArduinoSerialReader : MonoBehaviour
                 if (_smoothedPitchVelocity > 0f)
                     _peakPitchVelocity = Mathf.Max(_peakPitchVelocity, _smoothedPitchVelocity);
 
-                if (pitch >= pitchThreshold && _confirmedYaw >= yawThreshold - 2f)
+                if (!_supineReached)
+                {
+                    if (_curTilt >= supineThreshold)
+                    {
+                        _supineReached = true;
+                        Debug.Log($"[Step 2] Supine reached (tilt:{_curTilt:F1}°)");
+                    }
+                    else if (_curTilt > 10f)
+                        Debug.Log($"[Step 2] Reclining... tilt={_curTilt:F1}° / {supineThreshold}°");
+                    break;
+                }
+                float rightTarget = supineThreshold + hangBelowSupine;
+                if (_curTilt >= rightTarget && _confirmedYaw >= yawThreshold - 2f)
                 {
                     EvaluateLieBackSpeed(_peakPitchVelocity, step);
                     _peakPitchVelocity = 0f;
-                    Debug.Log($"✔ Step 2: Right Dix-Hallpike (P:{pitch:F1}° Y:{_confirmedYaw:F1}°)");
+                    Debug.Log($"✔ Step 2: Right Dix-Hallpike (tilt:{_curTilt:F1}° Y:{_confirmedYaw:F1}°)");
                     instructionManager.CompleteStep();
                 }
-                else if (pitch > 5f)
-                    Debug.Log($"[Step 2] Progress: pitch={pitch:F1}° / {pitchThreshold}° yaw={_confirmedYaw:F1}°");
+                else if (_curTilt > 5f)
+                    Debug.Log($"[Step 2] Head hang: tilt={_curTilt:F1}° / {rightTarget:F1}° yaw={_confirmedYaw:F1}°");
                 break;
 
             // Step 3: Hold right position and observe
@@ -289,15 +308,28 @@ public class ArduinoSerialReader : MonoBehaviour
                 if (_smoothedPitchVelocity > 0f)
                     _peakPitchVelocity = Mathf.Max(_peakPitchVelocity, _smoothedPitchVelocity);
 
-                if (pitch >= pitchThreshold && _confirmedYaw <= -yawThreshold + 2f)
+                if (!_supineReached)
+                {
+                    if (_curTilt >= supineThreshold)
+                    {
+                        _supineReached = true;
+                        Debug.Log($"[Step 6] Supine reached (tilt:{_curTilt:F1}°)");
+                    }
+                    else if (_curTilt > 10f)
+                        Debug.Log($"[Step 6] Reclining... tilt={_curTilt:F1}° / {supineThreshold}°");
+                    break;
+                }
+
+                float leftTarget = supineThreshold + hangBelowSupine;
+                if (_curTilt >= leftTarget && _confirmedYaw <= -yawThreshold + 2f)
                 {
                     EvaluateLieBackSpeed(_peakPitchVelocity, step);
                     _peakPitchVelocity = 0f;
-                    Debug.Log($"✔ Step 6: Left Dix-Hallpike (P:{pitch:F1}° Y:{_confirmedYaw:F1}°)");
+                    Debug.Log($"✔ Step 6: Left Dix-Hallpike (tilt:{_curTilt:F1}° Y:{_confirmedYaw:F1}°)");
                     instructionManager.CompleteStep();
                 }
-                else if (pitch > 5f)
-                    Debug.Log($"[Step 6] pitch={pitch:F1}° spd={_smoothedPitchVelocity:F1}°/s peak={_peakPitchVelocity:F1}°/s");
+                else if (_curTilt > 5f)
+                    Debug.Log($"[Step 6] Head hang: tilt={_curTilt:F1}° / {leftTarget:F1}° yaw={_confirmedYaw:F1}°");
                 break;
 
             // Step 7: Hold left position and observe
@@ -628,6 +660,7 @@ public class ArduinoSerialReader : MonoBehaviour
             frame.vertical = float.Parse(e[1].Split(':')[1], culture);
             frame.horizontal = float.Parse(e[2].Split(':')[1], culture);
             frame.phase = int.Parse(e[3].Split(':')[1]);
+            frame.tilt = float.Parse(e[5].Split(':')[1], culture);
 
             return true;
         }
@@ -675,6 +708,7 @@ public class ArduinoSerialReader : MonoBehaviour
     {
         _hasFreshReading = false;
         _confirmedYaw = 0f;
+        _supineReached = false;
         ResetHoldState();
     }
 
