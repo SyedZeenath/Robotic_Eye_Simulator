@@ -8,17 +8,26 @@ public class TTS_Script : MonoBehaviour
 {
     [SerializeField] AudioSource audioSource;
 
-    // Paste your Google Cloud API key here
-    private const string API_KEY = "AIzaSyCEnvM5QiPpXLCIKihB3gwWqNtfHiPBHxQ";
+    // Loaded from GOOGLE_TTS_API_KEY in the .env file at the project root (see EnvLoader)
+    private const string API_KEY_ENV_VAR = "GOOGLE_TTS_API_KEY";
     private const string URL = "https://texttospeech.googleapis.com/v1/text:synthesize";
+
+    private string apiKey;
 
     public bool IsReady => true;
     public bool IsSpeaking { get; private set; } = false;
 
+    void Awake()
+    {
+        apiKey = EnvLoader.Get(API_KEY_ENV_VAR);
+        if (string.IsNullOrEmpty(apiKey))
+            Debug.LogError($"[TTS] {API_KEY_ENV_VAR} not set. Add it to the .env file at the project root.");
+    }
+
     public void SpeakOnDemand(string text)
     {
         if (string.IsNullOrEmpty(text)) return;
-        
+
         // CRITICAL: Set IsSpeaking IMMEDIATELY before starting coroutine
         // This prevents race conditions where Arduino checks IsSpeaking before coroutine runs
         IsSpeaking = true;
@@ -37,14 +46,14 @@ public class TTS_Script : MonoBehaviour
     {
         // IsSpeaking already set to true in SpeakOnDemand()
         
-        // en-US-Neural2-F — natural female voice, non-robotic
-        // Other good options: en-US-Neural2-C (female), en-US-Neural2-D (male)
+        // en-GB-Neural2-F — natural female voice, non-robotic
+        // Other good options: en-GB-Neural2-C (female), en-GB-Neural2-D (male)
         string json = $@"
         {{
             ""input"": {{ ""text"": ""{EscapeJson(text)}"" }},
             ""voice"": {{
-                ""languageCode"": ""en-US"",
-                ""name"": ""en-US-Neural2-F""
+                ""languageCode"": ""en-GB"",
+                ""name"": ""en-GB-Neural2-F""
             }},
             ""audioConfig"": {{
                 ""audioEncoding"": ""LINEAR16"",
@@ -54,7 +63,7 @@ public class TTS_Script : MonoBehaviour
 
         byte[] body = Encoding.UTF8.GetBytes(json);
 
-        using var req = new UnityWebRequest(URL + "?key=" + API_KEY, "POST");
+        using var req = new UnityWebRequest(URL + "?key=" + apiKey, "POST");
         req.uploadHandler   = new UploadHandlerRaw(body);
         req.downloadHandler = new DownloadHandlerBuffer();
         req.SetRequestHeader("Content-Type", "application/json");

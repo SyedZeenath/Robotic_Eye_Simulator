@@ -5,9 +5,18 @@ using UnityEngine.Networking;
 
 public class STT_Script : MonoBehaviour
 {
-    string apiKey = "AIzaSyAzGaAC0sVkNAiJZo7H_znX1bW_-C5THoY"; // TODO: Move this to a secure location, not hardcoded in the script
+    // Loaded from GOOGLE_STT_API_KEY in the .env file at the project root (see EnvLoader)
+    private const string API_KEY_ENV_VAR = "GOOGLE_STT_API_KEY";
+    string apiKey;
 
     public string RecognizedText { get; private set; } = "";
+
+    void Awake()
+    {
+        apiKey = EnvLoader.Get(API_KEY_ENV_VAR);
+        if (string.IsNullOrEmpty(apiKey))
+            Debug.LogError($"[STT] {API_KEY_ENV_VAR} not set. Add it to the .env file at the project root.");
+    }
 
     public IEnumerator Recognize(byte[] audioData, Action<string> onResult)
     {
