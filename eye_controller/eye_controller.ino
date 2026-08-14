@@ -5,35 +5,61 @@
  * Right eye: CH0=horizontal, CH1=vertical, CH2=torsion
  * Left eye:  CH4=horizontal, CH5=vertical, CH6=torsion
  *
- * Both eyes move with mirror effect — horizontal and torsion signs flip
- * N or NEUTRAL → all motors neutral
+ * Both eyes move with mirror effect - horizontal and torsion signs flip
+ * N or NEUTRAL -> all motors neutral
+ *
+ * File layout:
+ *   1. Declarations (structs, config constants, global state) - unchanged
+ *      order throughout, since Arduino auto-generates function prototypes
+ *      and inserts them immediately before the first function in the file;
+ *      any struct used in a function signature must therefore stay up here,
+ *      above every function, or the sketch fails to compile.
+ *   2. SECTION 1 - BPPV CORE: everything needed to actually run a clinical
+ *      exam (motor control, calibration, state machine, head tracking,
+ *      core serial commands).
+ *   3. SECTION 2 - DATA COLLECTION FOR EVALUATION: code that exists purely
+ *      to gather the data behind the dissertation's evaluation section
+ *      (positional-sync calibration test mode, IMU jitter/noise trial).
+ *      None of this runs during a normal triggered exam.
+ *   4. setup() / loop()
  */
 
 #include <Wire.h>
 #include <I2Cdev.h>
 #include <MPU6050_6Axis_MotionApps20.h>
 #include <Adafruit_PWMServoDriver.h>
+#include <string.h>
+#include <stdlib.h>
+
+// Calibration lookup-table entry (physical eye angle -> digital command
+// that actually achieves it). Declared here, immediately after the
+// includes and before any function, because compensate() takes a
+// CalPoint* parameter and Arduino's auto-generated prototype for it must
+// be able to see this type.
+struct CalPoint { float physical; float digital; };
 
 // **********************************************
-// TEST FLAG
+// DEV/DEBUG TOGGLE
+// Lets the sketch run and auto-trigger a BPPV sequence without a
+// connected IMU, for bench testing the motors alone.
 // **********************************************
 #define SKIP_IMU_TEST   false
 #define BPPV_SIDE       'R'
 
 // **********************************************
-// IMU
+// IMU (MPU6050 + DMP)
 // **********************************************
 MPU6050 mpu;
 bool dmpReady = false;
-uint8_t mpuIntStatus, devStatus;
-uint16_t packetSize, fifoCount;
+uint8_t devStatus;
+uint16_t packetSize;
 uint8_t fifoBuffer[64];
 Quaternion q;
 VectorFloat gravity;
 float yawOffset = 0, pitchOffset = 0, rollOffset = 0;
 const unsigned long stabilizationDelay = 15000;
 const int calibrationSamples = 100;
-float imuYaw = 0, imuPitch = 0, imuRoll = 0;
+float imuYaw = 0, imuPitch = 0, imuRoll = 0;   // Kalman-filtered, broadcast to Unity
 float tiltFromVertical = 0;
 
 struct EulerAngles {
@@ -44,7 +70,7 @@ struct EulerAngles {
 };
 
 // **********************************************
-// PCA9685
+// PCA9685 / servo output
 // **********************************************
 Adafruit_PWMServoDriver pca = Adafruit_PWMServoDriver(0x40);
 
@@ -65,12 +91,13 @@ Adafruit_PWMServoDriver pca = Adafruit_PWMServoDriver(0x40);
 #define SERVO_MIN     12
 #define SERVO_MAX     168
 
-#define GAIN_TORSION    4.0
+// Vertical uses one gain both directions (no asymmetry found for this
+// axis). Torsion/horizontal use separate positive/negative gains, defined
+// with the rest of the calibration machinery further down.
 #define GAIN_VERTICAL   3.5
-#define GAIN_HORIZONTAL 3.5
 
 // **********************************************
-// BPPV clinical parameters
+// BPPV clinical parameters (exam timing + target angles)
 // **********************************************
 #define PEAK_TORSION_DEG     19.0
 #define PEAK_VERTICAL_DEG    18.0
@@ -95,7 +122,7 @@ Adafruit_PWMServoDriver pca = Adafruit_PWMServoDriver(0x40);
 #define LOOP_INTERVAL_MS          10
 
 // **********************************************
-// Motor state
+// Motor / exam state
 // **********************************************
 float eyeTorsion    = 0.0;
 float eyeVertical   = 0.0;
@@ -118,62 +145,145 @@ int  currentPhase  = 0;
 bool motorRunning  = false;
 unsigned long phaseStartTime = 0;
 unsigned long lastMotorStep  = 0;
-unsigned long lastUnityPing  = 0;
-bool unityConnected = false;
 
-String serialBuffer = "";
+// True while loop() is holding eyeTorsion/eyeVertical/eyeHorizontal at a
+// fixed value set by a "C:" command (see SECTION 2), instead of running
+// the exam state machine. Declared here since both the core loop() and
+// the Section 2 command handler need it.
+bool testModeActive = false;
 
+// Fixed-size serial receive buffer (no heap allocation / fragmentation
+// risk from using String on a memory-constrained board). Shared by every
+// serial command, core and data-collection alike.
+#define SERIAL_BUF_SIZE 21
+char serialBuffer[SERIAL_BUF_SIZE] = "";
+uint8_t serialBufferLen = 0;
+
+// Simple single-axis Kalman filter used to smooth the raw DMP output
+// before it's broadcast to Unity. Operational (runs every loop), not
+// evaluation-only.
 struct Kalman1D {
-    float process_noise = 0.001;  // process noise
-    float measured_noise = 0.05;   // measurement noise 
+    float process_noise = 0.001;   // process noise
+    float measured_noise = 0.05;   // measurement noise
     float error_estimate = 1.0;    // estimate error covariance
-    float current_estimate = 0.0;    // current estimate
-    
+    float current_estimate = 0.0;  // current estimate
+
     float update(float measured_value) {
-        error_estimate += process_noise;  // Prediction step - noise grows by process noise each step
-        float kalman_gain = error_estimate / (error_estimate + measured_noise); // Kalman gain - how much to trust measurement vs prediction
-        current_estimate += kalman_gain * (measured_value - current_estimate); // Update estimate
-        error_estimate *= (1.0 - kalman_gain); // Update error covariance
+        error_estimate += process_noise;  // prediction step: uncertainty grows each step
+        float kalman_gain = error_estimate / (error_estimate + measured_noise); // trust measurement vs. prediction
+        current_estimate += kalman_gain * (measured_value - current_estimate);  // update estimate
+        error_estimate *= (1.0 - kalman_gain); // update error covariance
         return current_estimate;
     }
 };
 
 Kalman1D kalYaw, kalPitch, kalRoll;
 
-// **********************************************
-// Broadcast
-// **********************************************
-void broadcastState() {
-    Serial.print("H:");
-    Serial.print(imuYaw, 2); Serial.print(",");
-    Serial.print(imuPitch, 2); Serial.print(",");
-    Serial.print(imuRoll, 2); Serial.print("|T:");
-    Serial.print(eyeTorsion, 2); Serial.print(",V:");
-    Serial.print(eyeVertical, 2); Serial.print(",H:");
-    Serial.print(eyeHorizontal, 2); Serial.print(",P:");
-    Serial.print(currentPhase); Serial.print(",S:");
-    Serial.print(motorDir == 1 ? "R" : "L"); Serial.print(",X:");
-    Serial.println(tiltFromVertical, 2);
+// Running mean/variance accumulator (Welford's algorithm) used only by
+// the IMU jitter trial in SECTION 2, to characterise head-tracking noise
+// for the dissertation's evaluation section. Declared up here (not next
+// to the functions that use it) because printStat() takes a RunningStats&
+// parameter, which is subject to the same prototype-ordering constraint
+// as CalPoint above.
+struct RunningStats {
+    long n = 0;
+    float mean = 0.0f;
+    float M2 = 0.0f;
+
+    void update(float x) {
+        n++;
+        float delta = x - mean;
+        mean += delta / n;
+        float delta2 = x - mean;
+        M2 += delta * delta2;
+    }
+
+    float variance() { return n > 1 ? M2 / (n - 1) : 0.0f; }
+    float stddev()   { return sqrt(variance()); }
+    void reset()     { n = 0; mean = 0.0f; M2 = 0.0f; }
+};
+
+RunningStats rawYawStats, filtYawStats;
+RunningStats rawPitchStats, filtPitchStats;
+RunningStats rawRollStats, filtRollStats;
+RunningStats tiltStats; // no filtered counterpart, tiltFromVertical is unfiltered by design
+
+bool jitterTrialActive = false;
+const unsigned long JITTER_SAMPLES = 300; // ~3s at ~100Hz DMP output
+
+
+// ================================================================
+// SECTION 1 - BPPV CORE
+// Everything needed to run a real triggered exam: calibration,
+// motor control, the clinical state machine, head tracking, and the
+// core serial command set (R/L/N/RESET).
+// ================================================================
+
+// --- Positional-sync calibration tables ---
+// Built from photographic measurement of achieved vs. commanded eye
+// angle (see dissertation System Integration / Positional Synchronisation
+// section). Maps a desired physical angle to the digital command that
+// actually achieves it, correcting for firmware gain mismatch and
+// non-linear mechanical response. Negative torsion and negative
+// horizontal are not covered here: negative torsion beyond ~-12 deg is a
+// servo torque ceiling (not a calibration problem, so not correctable by
+// a table), and negative horizontal is passed through uncompensated
+// below pending further work.
+const CalPoint torsionCal[] = {
+  {0.0, 0.0}, {4.45, 5.0}, {6.84, 10.0}, {11.38, 14.0}, {13.23, 17.0}, {16.61, 19.0}
+};
+const int torsionCalN = sizeof(torsionCal) / sizeof(CalPoint);
+
+const CalPoint verticalCal[] = {
+  {0.0, 0.0}, {7.53, 3.0}, {14.91, 6.0}, {24.48, 9.0}, {34.02, 12.0}, {42.89, 15.0}, {54.97, 18.0}
+};
+const int verticalCalN = sizeof(verticalCal) / sizeof(CalPoint);
+
+const CalPoint horizPosCal[] = {
+  {0.0, 0.0}, {0.88, 1.0}, {2.64, 2.0}, {4.41, 3.0}, {5.29, 4.0}, {5.29, 5.0}, {7.95, 6.0}
+};
+const int horizPosCalN = sizeof(horizPosCal) / sizeof(CalPoint);
+
+// Piecewise-linear interpolation over a calibration table.
+float compensate(const CalPoint* table, int n, float desiredPhysical) {
+  if (desiredPhysical <= table[0].physical) return table[0].digital;
+  if (desiredPhysical >= table[n - 1].physical) return table[n - 1].digital;
+  for (int i = 0; i < n - 1; i++) {
+    if (desiredPhysical >= table[i].physical && desiredPhysical <= table[i + 1].physical) {
+      float span = table[i + 1].physical - table[i].physical;
+      if (span < 0.001) return table[i].digital; // guards duplicate points, e.g. h4/h5
+      float frac = (desiredPhysical - table[i].physical) / span;
+      return table[i].digital + frac * (table[i + 1].digital - table[i].digital);
+    }
+  }
+  return table[n - 1].digital;
 }
 
-// **********************************************
-// Motor utilities
-// **********************************************
+// --- Motor utilities ---
 uint16_t angleToPulse(float angle) {
     angle = constrain(angle, SERVO_MIN, SERVO_MAX);
     return (uint16_t)(PULSE_MIN + (angle / 180.0) * (PULSE_MAX - PULSE_MIN));
 }
 
-float eyeToServo(float eyeAngle, float gain, float trim) {
+float eyeToServo(float eyeAngle, float gainPos, float gainNeg, float trim) {
+    float gain = (eyeAngle >= 0.0f) ? gainPos : gainNeg;
     return constrain(SERVO_NEUTRAL + trim + (eyeAngle * gain), (float)SERVO_MIN, (float)SERVO_MAX);
 }
 
+// Per-motor trim, currently all zero. Kept as named constants (rather
+// than removed) so a future bench-calibration pass has somewhere
+// obvious to put a correction without touching writeAllMotors().
 #define TRIM_R_TORSION 0.0f
 #define TRIM_L_TORSION 0.0f
 #define TRIM_R_VERTICAL 0.0f
 #define TRIM_L_VERTICAL 0.0f
 #define TRIM_R_HORIZONTAL 0.0f
 #define TRIM_L_HORIZONTAL 0.0f
+
+#define GAIN_TORSION_POS      4.0f
+#define GAIN_TORSION_NEG      4.0f   // start here, tune by bench test
+#define GAIN_HORIZONTAL_POS   3.0f
+#define GAIN_HORIZONTAL_NEG   2.0f   // start here, tune by bench test
 
 // **********************************************
 // writeAllMotors
@@ -184,15 +294,27 @@ float eyeToServo(float eyeAngle, float gain, float trim) {
 //
 // Right BPPV: right eye = primary
 // Left BPPV:  left eye = primary
+//
+// eyeTorsion/eyeVertical/eyeHorizontal are run through the calibration
+// tables above before being converted to servo angles, so every other
+// part of the code (state machine, clamping, broadcastState) keeps
+// working in real physical/clinical degrees, unchanged.
 // **********************************************
 void writeAllMotors() {
-    pca.setPWM(R_CH_TORSION, 0, angleToPulse(eyeToServo(-eyeTorsion, GAIN_TORSION, TRIM_R_TORSION)));
-    pca.setPWM(R_CH_VERTICAL, 0, angleToPulse(eyeToServo(eyeVertical, GAIN_VERTICAL, TRIM_R_VERTICAL)));
-    pca.setPWM(R_CH_HORIZONTAL, 0, angleToPulse(eyeToServo(-eyeHorizontal, GAIN_HORIZONTAL, TRIM_R_HORIZONTAL)));
+    float tCmd = eyeTorsion >= 0 ?  compensate(torsionCal, torsionCalN,  eyeTorsion)
+                                  : -compensate(torsionCal, torsionCalN, -eyeTorsion);
+    float vCmd = eyeVertical >= 0 ? compensate(verticalCal, verticalCalN,  eyeVertical)
+                                  : -compensate(verticalCal, verticalCalN, -eyeVertical);
+    float hCmd = eyeHorizontal >= 0 ? compensate(horizPosCal, horizPosCalN, eyeHorizontal)
+                                     : eyeHorizontal; // negative side not yet calibrated
 
-    pca.setPWM(L_CH_TORSION, 0, angleToPulse(eyeToServo( eyeTorsion, GAIN_TORSION, TRIM_L_TORSION)));
-    pca.setPWM(L_CH_VERTICAL, 0, angleToPulse(eyeToServo( eyeVertical, GAIN_VERTICAL, TRIM_L_VERTICAL)));
-    pca.setPWM(L_CH_HORIZONTAL, 0, angleToPulse(eyeToServo( eyeHorizontal, GAIN_HORIZONTAL, TRIM_L_HORIZONTAL)));
+    pca.setPWM(R_CH_TORSION, 0, angleToPulse(eyeToServo(-tCmd, GAIN_TORSION_POS, GAIN_TORSION_NEG, TRIM_R_TORSION)));
+    pca.setPWM(R_CH_VERTICAL, 0, angleToPulse(eyeToServo(vCmd, GAIN_VERTICAL, GAIN_VERTICAL, TRIM_R_VERTICAL)));
+    pca.setPWM(R_CH_HORIZONTAL, 0, angleToPulse(eyeToServo(-hCmd, GAIN_HORIZONTAL_POS, GAIN_HORIZONTAL_NEG, TRIM_R_HORIZONTAL)));
+
+    pca.setPWM(L_CH_TORSION, 0, angleToPulse(eyeToServo( tCmd, GAIN_TORSION_POS, GAIN_TORSION_NEG, TRIM_L_TORSION)));
+    pca.setPWM(L_CH_VERTICAL, 0, angleToPulse(eyeToServo( vCmd, GAIN_VERTICAL, GAIN_VERTICAL, TRIM_L_VERTICAL)));
+    pca.setPWM(L_CH_HORIZONTAL, 0, angleToPulse(eyeToServo( hCmd, GAIN_HORIZONTAL_POS, GAIN_HORIZONTAL_NEG, TRIM_L_HORIZONTAL)));
 }
 
 void allNeutral() {
@@ -208,12 +330,30 @@ void allNeutral() {
     beatState = BEAT_DRIFT;
     currentPhase = 0;
     motorRunning = false;
+    testModeActive = false; // any neutral/reset also leaves test-hold mode
+    Serial.print(F("PHASE:0,")); Serial.println(millis());
 }
 
+// Constrains commanded angles to the clinical peak limits, and prints a
+// CLAMPED line whenever a requested angle actually gets capped, so an
+// out-of-range request is never silent.
 void clampEyeAngles() {
+    float reqT = eyeTorsion, reqV = eyeVertical, reqH = eyeHorizontal;
     eyeTorsion = constrain(eyeTorsion, -PEAK_TORSION_DEG, PEAK_TORSION_DEG);
     eyeVertical = constrain(eyeVertical, -PEAK_VERTICAL_DEG, PEAK_VERTICAL_DEG);
     eyeHorizontal = constrain(eyeHorizontal, -PEAK_HORIZONTAL_DEG, PEAK_HORIZONTAL_DEG);
+    if (reqT != eyeTorsion) {
+        Serial.print(F("CLAMPED torsion requested ")); Serial.print(reqT, 2);
+        Serial.print(F(" applied ")); Serial.println(eyeTorsion, 2);
+    }
+    if (reqV != eyeVertical) {
+        Serial.print(F("CLAMPED vertical requested ")); Serial.print(reqV, 2);
+        Serial.print(F(" applied ")); Serial.println(eyeVertical, 2);
+    }
+    if (reqH != eyeHorizontal) {
+        Serial.print(F("CLAMPED horizontal requested ")); Serial.print(reqH, 2);
+        Serial.print(F(" applied ")); Serial.println(eyeHorizontal, 2);
+    }
 }
 
 void advancePhase(unsigned long now) {
@@ -221,7 +361,8 @@ void advancePhase(unsigned long now) {
     phaseStartTime = now;
     lastMotorStep = now;
     beatState = BEAT_DRIFT;
-    Serial.print("PHASE:"); Serial.println(currentPhase);
+    Serial.print(F("PHASE:")); Serial.print(currentPhase);
+    Serial.print(F(",")); Serial.println(now);
 }
 
 // **********************************************
@@ -238,14 +379,19 @@ void startBPPV(char side) {
     phaseStartTime = millis();
     lastMotorStep = millis();
     beatState = BEAT_DRIFT;
-    Serial.print("BPPV started - side: "); Serial.println(side);
-    Serial.print("Primary eye: "); Serial.println(side);
+    Serial.print(F("PHASE:1,")); Serial.println(phaseStartTime);
+    Serial.print(F("BPPV started - side: ")); Serial.println(side);
+    Serial.print(F("Primary eye: ")); Serial.println(side);
 }
 
 // **********************************************
-// BPPV state machine - unchanged from before
+// BPPV state machine
 // motorDir applied to torsion and horizontal only
 // Vertical always upbeat regardless of side
+//
+// Phase 1: latency drift, Phase 2: crescendo, Phase 3: nystagmus beating
+// (the scored diagnostic pattern), Phase 4: decrescendo, Phase 5: reversal
+// (drives back the opposite way after the scored interval ends).
 // **********************************************
 void runMotorStep() {
     unsigned long now = millis();
@@ -283,18 +429,17 @@ void runMotorStep() {
             float driftTarget = BEAT_DRIFT_DEG * envelope;
 
             if (beatState == BEAT_DRIFT) {
-                // Slow phase - drifts DOWNWARD + top tilts AWAY from affected ear
-                // This is the quiet drift between beats
-                eyeTorsion += motorDir * BEAT_DRIFT_SPEED_TOR * dt; // flipped
-                eyeVertical -= BEAT_DRIFT_SPEED_VER * dt; // downward
-                eyeHorizontal += motorDir * BEAT_DRIFT_SPEED_HOR * dt; // flipped
+                eyeTorsion += motorDir * BEAT_DRIFT_SPEED_TOR * dt;
+                eyeVertical -= BEAT_DRIFT_SPEED_VER * dt;
+                eyeHorizontal += motorDir * BEAT_DRIFT_SPEED_HOR * dt;
 
-                if (abs(eyeTorsion) >= driftTarget || abs(eyeVertical) >= driftTarget * 0.9)
+                if (abs(eyeTorsion) >= driftTarget || abs(eyeVertical) >= driftTarget * 0.9) {
                     beatState = BEAT_SNAP;
+                    Serial.print(F("DRIFT_END:")); Serial.print(now);
+                    Serial.print(F(",")); Serial.println(eyeTorsion, 3);
+                }
             }
             else {
-                // Fast phase - snaps UPWARD + top tilts TOWARD affected ear
-                // This is the visible flick
                 float snapStep = BEAT_SNAP_SPEED * dt;
                 if (eyeTorsion > 0.0) eyeTorsion = max(0.0f, eyeTorsion - snapStep);
                 else if (eyeTorsion < 0.0) eyeTorsion = min(0.0f, eyeTorsion + snapStep);
@@ -307,6 +452,8 @@ void runMotorStep() {
                 if (fabs(eyeTorsion) <= 0.01 && fabs(eyeVertical) <= 0.01) {
                     eyeHorizontal = 0.0;
                     beatState = BEAT_DRIFT;
+                    Serial.print(F("DRIFT_START:")); Serial.print(now);
+                    Serial.print(F(",")); Serial.println(eyeTorsion, 3);
                 }
             }
             clampEyeAngles();
@@ -326,8 +473,16 @@ void runMotorStep() {
             }
             else {
                 float snapStep = BEAT_SNAP_SPEED * fade * dt;
-                if (abs(eyeTorsion) > 0.3) eyeTorsion += eyeTorsion > 0 ? -snapStep : snapStep; else eyeTorsion = 0.0;
-                if (abs(eyeVertical) > 0.3) eyeVertical += eyeVertical > 0 ? -snapStep : snapStep; else eyeVertical = 0.0;
+                if (abs(eyeTorsion) > 0.3) {
+                    eyeTorsion += eyeTorsion > 0 ? -snapStep : snapStep;
+                } else {
+                    eyeTorsion = 0.0;
+                }
+                if (abs(eyeVertical) > 0.3) {
+                    eyeVertical += eyeVertical > 0 ? -snapStep : snapStep;
+                } else {
+                    eyeVertical = 0.0;
+                }
                 eyeHorizontal *= 0.9;
                 if (abs(eyeTorsion) <= 0.3 && abs(eyeVertical) <= 0.3) {
                     eyeTorsion = 0.0; eyeVertical = 0.0; beatState = BEAT_DRIFT;
@@ -340,9 +495,9 @@ void runMotorStep() {
 
         case 5: {
             float fade = exp(-phaseT / 3.0);
-            eyeTorsion -= motorDir * 9.4 * fade * dt; // flipped
-            eyeVertical += 11.3 * fade * dt; // upward reversal
-            eyeHorizontal += motorDir * 6.3 * fade * dt; // flipped
+            eyeTorsion -= motorDir * 9.4 * fade * dt;
+            eyeVertical += 11.3 * fade * dt;
+            eyeHorizontal += motorDir * 6.3 * fade * dt;
             eyeHorizontal = constrain(eyeHorizontal, -6.0, 6.0);
             clampEyeAngles();
             if (phaseT >= REVERSAL_MS / 1000.0) allNeutral();
@@ -354,68 +509,53 @@ void runMotorStep() {
 }
 
 // **********************************************
-// Serial commands
+// Broadcast to Unity, once per LOOP_INTERVAL_MS.
+// TS: is the Arduino send-time used for the Unity-side latency
+// measurement in the dissertation's latency evaluation.
 // **********************************************
-void checkSerialCommands() {
-    while (Serial.available()) {
-        char c = Serial.read();
-        if (c == '\n' || c == '\r') {
-            serialBuffer.trim();
-            if (serialBuffer.length() > 0) {
-                lastUnityPing = millis();
-                unityConnected = true; 
-                Serial.print("CMD:"); Serial.println(serialBuffer);
-                if ((serialBuffer == "TRIGGER" || serialBuffer == "R") && !motorRunning)
-                    startBPPV('R');
-                else if (serialBuffer == "L" && !motorRunning)
-                    startBPPV('L');
-                else if (serialBuffer == "NEUTRAL" || serialBuffer == "N") {
-                    allNeutral();
-                    Serial.println("Motors neutral");
-                }
-                else if (serialBuffer == "RESET") {
-                    mpu.resetFIFO();
-                    allNeutral();
-                    Serial.println("RESET_OK");
-                }
-            }
-            serialBuffer = "";
-        }
-        else if (c >= 32 && c < 127) {
-            serialBuffer += c;
-            if (serialBuffer.length() > 20) serialBuffer = "";
-        }
-    }
+void broadcastState() {
+    Serial.print(F("H:"));
+    Serial.print(imuYaw, 2); Serial.print(F(","));
+    Serial.print(imuPitch, 2); Serial.print(F(","));
+    Serial.print(imuRoll, 2); Serial.print(F("|T:"));
+    Serial.print(eyeTorsion, 2); Serial.print(F(",V:"));
+    Serial.print(eyeVertical, 2); Serial.print(F(",H:"));
+    Serial.print(eyeHorizontal, 2); Serial.print(F(",P:"));
+    Serial.print(currentPhase); Serial.print(F(",S:"));
+    Serial.print(motorDir == 1 ? F("R") : F("L")); Serial.print(F(",X:"));
+    Serial.print(tiltFromVertical, 2); Serial.print(F(",TS:"));
+    Serial.println(millis());
 }
 
-// **********************************************
-// IMU
-// **********************************************
+// --- IMU ---
 EulerAngles quaternionToEuler() {
-    // Extract angles directly from quaternion - no gimbal lock
-    // These formulas are the standard quaternion to Euler conversion
-    // but computed in a way that avoids the singularity at pitch=90
+    // Extract angles directly from the quaternion - no gimbal lock.
+    // Standard quaternion-to-Euler conversion, computed to avoid the
+    // singularity at pitch = 90 deg.
     float w = q.w, x = q.x, y = q.y, z = q.z;
-    // Pitch - rotation around Y axis (forward/back tilt); Closed form conversion
+
+    // Pitch - rotation around Y axis (forward/back tilt); closed-form conversion
     float sinp = constrain(2.0 * (w * y - z * x), -1.0, 1.0);
     float pitch = asin(sinp) * 180.0 / M_PI;
+
     // Roll - rotation around X axis
     float sinr = 2.0 * (w * x + y * z);
     float cosr = 1.0 - 2.0 * (x * x + y * y);
     float roll = atan2(sinr, cosr) * 180.0 / M_PI;
-    // Yaw - rotation around Z axis
-    // This still has gimbal lock near pitch=90 but for Dix-Hallpike
-    // the head never reaches 90 degrees pitch so it remains stable
+
+    // Yaw - rotation around Z axis. Still has gimbal lock near pitch=90,
+    // but the head never reaches 90 deg pitch during Dix-Hallpike, so it
+    // remains stable in practice.
     float siny = 2.0 * (w * z + x * y);
     float cosy = 1.0 - 2.0 * (y * y + z * z);
     float yaw = atan2(siny, cosy) * 180.0 / M_PI;
 
     float tilt = acos(constrain(1.0 - 2.0 * (x * x + y * y), -1.0, 1.0)) * 180.0 / M_PI;
 
-
     return EulerAngles{pitch, roll, yaw, tilt};
 }
 
+int consecutiveIMUFailures = 0;
 void readIMU() {
     if (!dmpReady) return;
 
@@ -423,10 +563,23 @@ void readIMU() {
 
     if (fifoCount == 1024) {
         mpu.resetFIFO();
+        consecutiveIMUFailures++;
+        Serial.print(F("IMU: FIFO overflow, reset. fails=")); Serial.println(consecutiveIMUFailures);
+        if (consecutiveIMUFailures >= 20) { restartDMP(); consecutiveIMUFailures = 0; }
         return;
     }
 
-    if (!mpu.dmpGetCurrentFIFOPacket(fifoBuffer)) return;
+    if (!mpu.dmpGetCurrentFIFOPacket(fifoBuffer)) {
+        consecutiveIMUFailures++;
+        if (consecutiveIMUFailures % 20 == 0) {
+            Serial.print(F("IMU: no packet, fifoCount=")); Serial.print(fifoCount);
+            Serial.print(F(" fails=")); Serial.println(consecutiveIMUFailures);
+        }
+        if (consecutiveIMUFailures >= 100) { restartDMP(); consecutiveIMUFailures = 0; }
+        return;
+    }
+
+    consecutiveIMUFailures = 0;
 
     // Discard extra packets so FIFO never accumulates
     while (mpu.getFIFOCount() >= packetSize)
@@ -436,20 +589,19 @@ void readIMU() {
 
     EulerAngles angles = quaternionToEuler();
 
-
     // Apply calibration offsets
     headYaw = angles.yaw - yawOffset;
     headPitch = angles.pitch - pitchOffset;
     headRoll = angles.roll - rollOffset;
 
-    // Wrap yaw to -180 to 180
+    // Wrap yaw to -180..180
     if (headYaw > 180) headYaw -= 360;
     if (headYaw < -180) headYaw += 360;
 
     // Apply Kalman filter - reduces noise on all three axes
     imuYaw = kalYaw.update(headYaw);
     imuPitch = kalPitch.update(headPitch);
-    imuRoll = kalRoll.update(headRoll);    
+    imuRoll = kalRoll.update(headRoll);
     tiltFromVertical = angles.tilt;
 }
 
@@ -471,56 +623,12 @@ void calibrateSensor() {
     pitchOffset = pitchSum / calibrationSamples;
     rollOffset = rollSum / calibrationSamples;
 
-    Serial.print("Calibration done Y:"); Serial.print(yawOffset, 2);
-    Serial.print(" P:"); Serial.print(pitchOffset, 2);
-    Serial.print(" R:"); Serial.println(rollOffset, 2);
+    Serial.print(F("Calibration done Y:")); Serial.print(yawOffset, 2);
+    Serial.print(F(" P:")); Serial.print(pitchOffset, 2);
+    Serial.print(F(" R:")); Serial.println(rollOffset, 2);
     while (Serial.available()) Serial.read();
-    serialBuffer = "";
-}
-
-// **********************************************
-// SETUP
-// **********************************************
-void setup() {
-    Wire.begin();
-    Wire.setClock(400000);
-    Serial.begin(115200);
-
-    Serial.println("Initialising PCA9685...");
-    pca.begin();
-    pca.setPWMFreq(PWM_FREQ);
-    delay(100);
-    allNeutral();
-
-    if (SKIP_IMU_TEST) {
-        Serial.println("TEST MODE: Skipping IMU. Auto-triggering in 2s...");
-        Serial.print("Side: "); Serial.println(BPPV_SIDE);
-        delay(2000);
-        startBPPV(BPPV_SIDE);
-    }
-    else {
-        Serial.println("MPU6050 DMP initializing...");
-        mpu.initialize();
-        devStatus = mpu.dmpInitialize();
-
-        if (devStatus == 0) {
-            mpu.CalibrateAccel(6);
-            mpu.CalibrateGyro(6);
-            mpu.setDMPEnabled(true);
-            dmpReady = true;
-            packetSize = mpu.dmpGetFIFOPacketSize();
-            Serial.print("Waiting 15s for sensor to settle...");
-            delay(stabilizationDelay);
-            Serial.println(" Done!");
-            calibrateSensor();
-        }
-        else {
-            Serial.print("DMP init failed (code ");
-            Serial.print(devStatus); Serial.println(")");
-        }
-
-        Serial.println("Ready. R/TRIGGER=right BPPV;  L=left BPPV;  N/NEUTRAL=reset");
-    }
+    serialBufferLen = 0;
+    serialBuffer[0] = '\0';
 }
 
 void restartDMP() {
@@ -530,16 +638,208 @@ void restartDMP() {
     delay(50);
     mpu.setDMPEnabled(true);
     packetSize = mpu.dmpGetFIFOPacketSize();
-    Serial.println("DMP restarted");
+    Serial.println(F("DMP restarted"));
 }
+
+// **********************************************
+// Serial command dispatcher.
+// Built around the fixed char serialBuffer[] (not String) - no heap
+// allocation, no fragmentation risk. Comparisons use strcmp/strncmp.
+//
+// Core exam commands: R/TRIGGER, L, N/NEUTRAL, RESET.
+// The remaining two branches (J, C:) dispatch into SECTION 2 below and
+// only exist to collect evaluation data; they never run during a normal
+// triggered exam.
+// **********************************************
+void checkSerialCommands() {
+    while (Serial.available()) {
+        char c = Serial.read();
+        if (c == '\n' || c == '\r') {
+            if (serialBufferLen > 0) {
+                serialBuffer[serialBufferLen] = '\0';
+                Serial.print(F("CMD:")); Serial.println(serialBuffer);
+
+                if ((strcmp(serialBuffer, "TRIGGER") == 0 || strcmp(serialBuffer, "R") == 0) && !motorRunning && !testModeActive)
+                    startBPPV('R');
+                else if (strcmp(serialBuffer, "L") == 0 && !motorRunning && !testModeActive)
+                    startBPPV('L');
+                else if (strcmp(serialBuffer, "NEUTRAL") == 0 || strcmp(serialBuffer, "N") == 0) {
+                    allNeutral();
+                    Serial.println(F("Motors neutral"));
+                }
+                else if (strcmp(serialBuffer, "RESET") == 0) {
+                    mpu.resetFIFO();
+                    allNeutral();
+                    Serial.println(F("RESET_OK"));
+                }
+                // --- data collection (SECTION 2) ---
+                else if (strcmp(serialBuffer, "J") == 0) {
+                    startJitterTrial();
+                }
+                else if (strncmp(serialBuffer, "C:", 2) == 0) {
+                    handleTestModeCommand(serialBuffer + 2);
+                }
+            }
+            serialBufferLen = 0;
+            serialBuffer[0] = '\0';
+        }
+        else if (c >= 32 && c < 127) {
+            if (serialBufferLen < SERIAL_BUF_SIZE - 1) {
+                serialBuffer[serialBufferLen++] = c;
+                serialBuffer[serialBufferLen] = '\0';
+            } else {
+                // overflow guard, same intent as the old ">20 chars" reset
+                serialBufferLen = 0;
+            }
+        }
+    }
+}
+
+
+// ================================================================
+// SECTION 2 - DATA COLLECTION FOR EVALUATION
+// Nothing here runs during a normal triggered exam. Both pieces exist
+// solely to produce the data behind the dissertation's evaluation
+// section, and are reached only via the J / C: serial commands above.
+// ================================================================
+
+// --- Positional-sync calibration / validation test mode ---
+// Drives the eye to a fixed commanded position outside the exam state
+// machine, so it can be photographed and measured to build/validate the
+// calibration tables in SECTION 1 (see Positional Synchronisation,
+// dissertation System Integration evaluation).
+//
+// Command form: C:<torsion>,<vertical>,<horizontal>  or  C:EXIT
+// Takes a plain char* (not String) and parses it with strtok/atof.
+// strtok writes '\0' into the buffer at each comma, so this consumes and
+// modifies `payload` - fine here, since it's only ever called once per
+// received line, right before checkSerialCommands() clears the buffer.
+void handleTestModeCommand(char* payload) {
+    if (strcmp(payload, "EXIT") == 0) {
+        allNeutral(); // resets angles, currentPhase=0, and clears testModeActive
+        Serial.println(F("Test hold mode exited"));
+        return;
+    }
+
+    char* tPart = strtok(payload, ",");
+    char* vPart = strtok(NULL, ",");
+    char* hPart = strtok(NULL, ",");
+
+    if (tPart == NULL || vPart == NULL || hPart == NULL) {
+        Serial.println(F("Bad C: command. Use  C:<torsion>,<vertical>,<horizontal>  e.g. C:20,0,0"));
+        return;
+    }
+
+    eyeTorsion    = atof(tPart);
+    eyeVertical   = atof(vPart);
+    eyeHorizontal = atof(hPart);
+    clampEyeAngles();
+
+    motorRunning = false;   // don't let the exam state machine run at the same time
+    testModeActive = true;
+    currentPhase = -1;      // distinct sentinel so Unity/InstructionManager can ignore it
+
+    Serial.print(F("TEST_HOLD T:")); Serial.print(eyeTorsion, 2);
+    Serial.print(F(" V:")); Serial.print(eyeVertical, 2);
+    Serial.print(F(" H:")); Serial.println(eyeHorizontal, 2);
+}
+
+// --- IMU jitter / noise trial ---
+// Characterises head-tracking noise (raw vs. Kalman-filtered) for the
+// dissertation's IMU/head evaluation: hold the head still, send "J",
+// and after JITTER_SAMPLES readings (~3s) the mean/SD of each channel is
+// printed for use in the evaluation's graphs and tables.
+void printStat(const char* label, RunningStats &s) {
+    Serial.print(label);
+    Serial.print(F(": n=")); Serial.print(s.n);
+    Serial.print(F(" mean=")); Serial.print(s.mean, 3);
+    Serial.print(F(" sd=")); Serial.println(s.stddev(), 3);
+}
+
+void startJitterTrial() {
+    if (SKIP_IMU_TEST) {
+        Serial.println(F("Jitter trial needs real IMU data, SKIP_IMU_TEST is true."));
+        return;
+    }
+    rawYawStats.reset();   filtYawStats.reset();
+    rawPitchStats.reset(); filtPitchStats.reset();
+    rawRollStats.reset();  filtRollStats.reset();
+    tiltStats.reset();
+    jitterTrialActive = true;
+    Serial.println(F("Jitter trial started. Hold pose steady..."));
+}
+
+void jitterTrialSample() {
+    rawYawStats.update(headYaw);     filtYawStats.update(imuYaw);
+    rawPitchStats.update(headPitch); filtPitchStats.update(imuPitch);
+    rawRollStats.update(headRoll);   filtRollStats.update(imuRoll);
+    tiltStats.update(tiltFromVertical);
+
+    if (rawYawStats.n >= JITTER_SAMPLES) {
+        jitterTrialActive = false;
+        Serial.println(F("=== JITTER TRIAL SUMMARY ==="));
+        printStat("yaw_raw", rawYawStats);     printStat("yaw_filt", filtYawStats);
+        printStat("pitch_raw", rawPitchStats); printStat("pitch_filt", filtPitchStats);
+        printStat("roll_raw", rawRollStats);   printStat("roll_filt", filtRollStats);
+        printStat("tilt_raw", tiltStats);
+        Serial.println(F("Send 'J' to run another trial at a new pose."));
+    }
+}
+
+
+// **********************************************
+// SETUP
+// **********************************************
+void setup() {
+    Wire.begin();
+    Wire.setClock(400000);
+    Serial.begin(115200);
+
+    Serial.println(F("Initialising PCA9685..."));
+    pca.begin();
+    pca.setPWMFreq(PWM_FREQ);
+    delay(100);
+    allNeutral();
+
+    if (SKIP_IMU_TEST) {
+        Serial.println(F("TEST MODE: Skipping IMU. Auto-triggering in 2s..."));
+        Serial.print(F("Side: ")); Serial.println(BPPV_SIDE);
+        delay(2000);
+        startBPPV(BPPV_SIDE);
+    }
+    else {
+        Serial.println(F("MPU6050 DMP initializing..."));
+        mpu.initialize();
+        devStatus = mpu.dmpInitialize();
+
+        if (devStatus == 0) {
+            mpu.CalibrateAccel(6);
+            mpu.CalibrateGyro(6);
+            mpu.setDMPEnabled(true);
+            dmpReady = true;
+            packetSize = mpu.dmpGetFIFOPacketSize();
+            Serial.print(F("Waiting 15s for sensor to settle..."));
+            delay(stabilizationDelay);
+            Serial.println(F(" Done!"));
+            calibrateSensor();
+        }
+        else {
+            Serial.print(F("DMP init failed (code "));
+            Serial.print(devStatus); Serial.println(F(")"));
+        }
+
+        Serial.println(F("Ready. R/TRIGGER=right BPPV;  L=left BPPV;  N/NEUTRAL=reset;  C:t,v,h=hold test angle;  C:EXIT=leave test mode"));
+    }
+}
+
 // **********************************************
 // LOOP
 // **********************************************
 void loop() {
     checkSerialCommands();
 
-    // Drain FIFO silently when no serial activity
-    // Prevents 20-30 min overflow without touching DMP state
+    // Drain FIFO silently when no serial activity.
+    // Prevents 20-30 min overflow without touching DMP state.
     if (!SKIP_IMU_TEST) {
         uint16_t count = mpu.getFIFOCount();
         if (count >= 1024) {
@@ -547,9 +847,16 @@ void loop() {
             return;
         }
         readIMU();
+        if (jitterTrialActive) jitterTrialSample();
     }
 
-    if (motorRunning) runMotorStep();
+    // While holding a fixed test angle (SECTION 2), skip the exam state
+    // machine entirely and just keep driving the motors at the held values.
+    if (testModeActive) {
+        writeAllMotors();
+    } else if (motorRunning) {
+        runMotorStep();
+    }
 
     static unsigned long lastBroadcast = 0;
     unsigned long now = millis();
