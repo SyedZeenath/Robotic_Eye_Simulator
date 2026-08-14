@@ -164,7 +164,25 @@ Channels CH3 and CH7-15 are unused by the current implementation.
 
 ## Setup
 
-### 1. Arduino
+### 1. API Configuration
+
+The Unity application uses Google Cloud Text-to-Speech (TTS) and Speech-to-Text (STT) services. The required API keys must be stored in a `.env` file in the project root.
+
+Create the `.env` file by copying the format from `.env.example`:
+
+```env
+GOOGLE_TTS_API_KEY=your-google-cloud-tts-api-key-here
+GOOGLE_STT_API_KEY=your-google-cloud-stt-api-key-here
+```
+
+For the dissertation version, the personal API keys required to run the application are already included in the `.env.example` file for demonstration and evaluation purposes. These keys will be removed after the dissertation evaluation. These keys can be used now for testing the application.
+
+To create new API keys, create or select a project in the Google Cloud Console, enable the **Cloud Text-to-Speech API** and **Cloud Speech-to-Text API**, then create an API key under **APIs & Services → Credentials**. Add the generated keys to the corresponding entries in `.env`.
+
+The `.env` file should not be committed to version control.
+
+
+### 2. Arduino
 
 1. Install the Arduino IDE.
 2. Install the required I2Cdev, MPU6050 and Adafruit PWM Servo Driver libraries.
@@ -182,7 +200,7 @@ SKIP_IMU_TEST = true
 
 The serial interface uses **115200 baud**.
 
-### 2. Unity
+### 3. Unity
 
 1. Install Unity 2022.x or a compatible LTS release.
 2. Open the `unity_frontend/` directory through Unity Hub.
@@ -408,6 +426,7 @@ The application was developed and tested on Windows 10/11.
 
 ### TTS/STT does not work
 
+- Check that the Google Cloud TTS and STT API keys are correctly configured in the .env file as described in the API Configuration section.
 - Check Windows microphone permissions.
 - Confirm that the correct audio input/output devices are selected.
 - Check Unity audio settings.

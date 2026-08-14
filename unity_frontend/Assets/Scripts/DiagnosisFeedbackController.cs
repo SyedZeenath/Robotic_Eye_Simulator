@@ -41,7 +41,7 @@ public class DiagnosisFeedbackController : MonoBehaviour
             keywords = new[]{ "posterior", "bppv", "torsional", "upbeat", "benign paroxysmal" },
             isCorrect = true,
             explanation =
-                "Correct. This is right posterior canal BPPV.\n\n"
+                "Correct. This is posterior canal BPPV.\n\n"
               + "Displaced otoconia from the utricle settle in the posterior semicircular canal. "
               + "When the head moves into the Dix-Hallpike position, the debris shifts, deflecting "
               + "the cupula and triggering the characteristic upbeat-torsional nystagmus you observed, "
@@ -100,11 +100,11 @@ public class DiagnosisFeedbackController : MonoBehaviour
     const string FallbackTitle = "Unclear diagnosis";
     const string FallbackBody =
         "The response did not match a recognised BPPV type.\n\n"
-      + "The correct answer is posterior canal BPPV (right side). "
+      + "The correct answer is posterior canal BPPV. "
       + "Displaced otoconia in the posterior semicircular canal cause the upbeat-torsional "
       + "nystagmus with the latency and crescendo-decrescendo pattern shown in the simulation.";
     const string FallbackSpoken =
-        "The correct diagnosis is right posterior canal BPPV. "
+        "The correct diagnosis is posterior canal BPPV. "
       + "The upbeat torsional nystagmus with latency and decay is the clinical signature of "
       + "posterior canal canalithiasis.";
 
