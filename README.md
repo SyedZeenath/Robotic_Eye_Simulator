@@ -123,7 +123,7 @@ Evaluation and calibration material:
 
 Prebuilt standalone application and evaluation data generated during testing:
 
-- **A prebuilt `.exe` and its accompanying `_Data` folder** - the standalone Windows build of the application. If no changes need to be made to the project, this can be run directly without opening or importing the project in Unity. Run the `.exe` from inside this folder as-is; the `_Data` folder (which contains the bundled `StreamingAssets/env` file among other runtime data) must stay alongside the `.exe`, since a Unity build is not a single portable file. Copying or sharing the `.exe` on its own, without its `_Data` folder, will not run.
+- **A prebuilt `.exe` and its accompanying `_Data` folder** - the standalone Windows build of the application. If no changes need to be made to the project, this can be run directly without opening or importing the project in Unity. Run the `Robotic_Eye_Simulator.exe` from inside this folder as-is; the `_Data` folder (which contains the bundled `StreamingAssets/env` file among other runtime data) must stay alongside the `Robotic_Eye_Simulator.exe`, since a Unity build is not a single portable file. Copying or sharing the `Robotic_Eye_Simulator.exe` on its own, without its `_Data` folder, will not run.
 (Only for the Dissertation scope, will remove commiting the `/buildFiles/` later on)
 - **`latency_results.csv`** - Serial communication latency measurements.
 - **`sync_results.csv`** - Motor synchronisation measurements.
@@ -275,8 +275,8 @@ The exact message format is implemented in `eye_controller.ino` and parsed by `A
 If the application does not need any modification, the prebuilt standalone build in `/unity_frontend/buildFiles/` can be run directly:
 
 1. Open the `unity_frontend/buildFiles/` folder.
-2. Run the `.exe` found there directly, no Unity installation required on the target machine.
-3. Keep the `.exe` and its accompanying `_Data` folder together in the same location; do not copy or share the `.exe` on its own.
+2. Run the `Robotic_Eye_Simulator.exe` found there directly, no Unity installation required on the target machine.
+3. Keep the `Robotic_Eye_Simulator.exe` and its accompanying `_Data` folder together in the same location; do not copy or share the `Robotic_Eye_Simulator.exe` on its own.
 4. Connect the Arduino and confirm the correct COM port as described in the Troubleshooting section if the serial connection is not detected automatically.
 
 ### Bench Test
@@ -293,7 +293,7 @@ For motor-only testing:
 
 1. Connect the Arduino and physical eye mechanism.
 2. Connect the MPU6050.
-3. Start the Unity application (either the Editor or the prebuilt `.exe`).
+3. Start the Unity application (either the Editor or the prebuilt `Robotic_Eye_Simulator.exe`).
 4. Confirm that the serial connection is active.
 5. Select a patient if required.
 6. Start the Dix-Hallpike test workflow.
@@ -413,7 +413,7 @@ The MPU6050 provides accelerometer and gyroscope measurements. Its Digital Motio
 
 The application was developed and tested on Windows 10/11.
 
-> **Sharing a build:** always share the full build output folder (the `.exe` together with its `_Data` folder), never the `.exe` file alone. The `_Data` folder contains `StreamingAssets/env` and other runtime data the application needs to run.
+> **Sharing a build:** always share the full build output folder (the `Robotic_Eye_Simulator.exe` together with its `_Data` folder), never the `Robotic_Eye_Simulator.exe` file alone. The `_Data` folder contains `StreamingAssets/env` and other runtime data the application needs to run.
 
 ## Troubleshooting
 
@@ -450,7 +450,7 @@ The application was developed and tested on Windows 10/11.
 ### TTS/STT does not work
 
 - Confirm the `env` file exists at `Assets/StreamingAssets/env` (or, for a built application, inside the `_Data/StreamingAssets/` folder shipped alongside the `.exe`) and that the Google Cloud TTS and STT API keys are correctly set inside it, as described in the API Configuration section.
-- If running a shared build, confirm the `.exe` was not copied or shared without its `_Data` folder.
+- If running a shared build, confirm the `Robotic_Eye_Simulator.exe` was not copied or shared without its `_Data` folder.
 - Check Windows microphone permissions.
 - Confirm that the correct audio input/output devices are selected.
 - Check Unity audio settings.
@@ -484,7 +484,7 @@ The main extension points are:
 - TTS/STT functionality depends on the host computer's audio configuration.
 - The system is intended as a research and training platform; clinical diagnostic validity has not been established by this project.
 - Hardware limits should be maintained to prevent the eye mechanism from being driven beyond its safe mechanical range.
-- Sharing the application requires sharing the full build output folder; the `.exe` alone will not run and will not carry the bundled `env` configuration.
+- Sharing the application requires sharing the full build output folder; the `Robotic_Eye_Simulator.exe` alone will not run and will not carry the bundled `env` configuration.
 
 ## Future Work
 
