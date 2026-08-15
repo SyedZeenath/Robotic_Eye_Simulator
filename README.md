@@ -66,7 +66,7 @@ Unity project containing the digital twin, user interface, clinical workflow and
 - **`DiagnosisFeedbackController.cs`** - Handles assessment feedback shown during the test.
 - **`LatencyMonitor.cs`** - Records communication and timing information.
 - **`SyncDebugOverlay.cs`** - Displays synchronisation and debugging information.
-- **`EnvLoader.cs`** - Loads runtime environment and configuration settings.
+- **`EnvLoader.cs`** - Loads runtime environment and configuration settings from the `env` file in `Assets/StreamingAssets/` (see API Configuration below).
 - **`RecordingIndicator.cs`** - Displays recording status.
 - **`TTS_Script.cs`** / **`STT_Script.cs`** - Text-to-speech and speech-to-text functions.
 - **`MicrophoneRecorder.cs`** - Handles audio recording.
@@ -88,7 +88,7 @@ Unity project containing the digital twin, user interface, clinical workflow and
 - **`Assets/Prefab/`** - Reusable head and eye components.
 - **`Assets/Resources/`** - Patient JSON data, textures, materials and other runtime resources.
   - `patients.json` - Patient data used by the application.
-- **`Assets/StreamingAssets/`** - Additional runtime data and configuration.
+- **`Assets/StreamingAssets/`** - Additional runtime data and configuration, including the `env` configuration file (see API Configuration below). This folder is copied automatically into every build output, which is what lets the `env` file travel with a shared build without any manual copy step.
 - **`Assets/Models/`** - 3D head and eye geometry.
 - **`Assets/Materials/`** - Materials used by the scene.
 - **`Packages/`** - Unity package configuration and dependencies.
@@ -121,8 +121,10 @@ Evaluation and calibration material:
 
 ### `/unity_frontend/buildFiles/`
 
-Evaluation data generated during testing:
+Prebuilt standalone application and evaluation data generated during testing:
 
+- **A prebuilt `.exe` and its accompanying `_Data` folder** - the standalone Windows build of the application. If no changes need to be made to the project, this can be run directly without opening or importing the project in Unity. Run the `.exe` from inside this folder as-is; the `_Data` folder (which contains the bundled `StreamingAssets/env` file among other runtime data) must stay alongside the `.exe`, since a Unity build is not a single portable file. Copying or sharing the `.exe` on its own, without its `_Data` folder, will not run.
+(Only for the Dissertation scope, will remove commiting the `/buildFiles/` later on)
 - **`latency_results.csv`** - Serial communication latency measurements.
 - **`sync_results.csv`** - Motor synchronisation measurements.
 - **`transfer_latency_results.csv`** - Data transfer latency measurements.
@@ -142,7 +144,6 @@ The tested system uses:
 - **USB connection** - Arduino-to-PC serial communication.
 
 ### PCA9685 Channel Mapping
-
 
 | Eye   | Horizontal | Vertical | Torsion |
 | ----- | ---------: | -------: | ------: |
@@ -166,21 +167,28 @@ Channels CH3 and CH7-15 are unused by the current implementation.
 
 ### 1. API Configuration
 
-The Unity application uses Google Cloud Text-to-Speech (TTS) and Speech-to-Text (STT) services. The required API keys must be stored in a `.env` file in the project root.
+The Unity application uses Google Cloud Text-to-Speech (TTS) and Speech-to-Text (STT) services. The required API keys must be stored in a plain-text configuration file named **`env`** (no leading dot) placed at:
 
-Create the `.env` file by copying the format from `.env.example`:
+```text
+Assets/StreamingAssets/env
+```
+
+The leading dot was dropped deliberately: Unity's asset importer does not reliably include files whose names begin with a dot when copying `StreamingAssets` into a build, so a dotfile placed there can silently fail to ship with the built application. Naming the file `env` instead avoids this and ensures it is bundled correctly every time the project is built.
+
+Create the file by copying the format from `env.example`:
 
 ```env
 GOOGLE_TTS_API_KEY=your-google-cloud-tts-api-key-here
 GOOGLE_STT_API_KEY=your-google-cloud-stt-api-key-here
 ```
 
-For the dissertation version, the personal API keys required to run the application are already included in the `.env.example` file for demonstration and evaluation purposes. These keys will be removed after the dissertation evaluation. These keys can be used now for testing the application.
+For the dissertation version, the personal API keys required to run the application are already included in the `env.example` file for demonstration and evaluation purposes. These keys will be removed after the dissertation evaluation. These keys can be used now for testing the application.
 
-To create new API keys, create or select a project in the Google Cloud Console, enable the **Cloud Text-to-Speech API** and **Cloud Speech-to-Text API**, then create an API key under **APIs & Services → Credentials**. Add the generated keys to the corresponding entries in `.env`.
+To create new API keys, create or select a project in the Google Cloud Console, enable the **Cloud Text-to-Speech API** and **Cloud Speech-to-Text API**, then create an API key under **APIs & Services → Credentials**. Add the generated keys to the corresponding entries in `env`.
 
-The `.env` file should not be committed to version control.
+`EnvLoader.cs` reads this file via `Application.streamingAssetsPath`, which resolves correctly both in the Unity Editor and in a standalone build, so no manual copying is required as long as the file lives in `Assets/StreamingAssets/env` before building.
 
+The `env` file should not be committed to version control.
 
 ### 2. Arduino
 
@@ -212,6 +220,8 @@ The serial interface uses **115200 baud**.
 8. Press **Play** to test the application in the Unity Editor.
 
 TTS/STT functions require the appropriate Windows audio and microphone permissions.
+
+> **Note:** If you only need to run the application as-is, with no code, scene, or asset changes, you do not need to open Unity at all. See `/unity_frontend/buildFiles/` above for the prebuilt `.exe`.
 
 ## Calibration
 
@@ -260,6 +270,15 @@ The exact message format is implemented in `eye_controller.ino` and parsed by `A
 
 ## Running the System
 
+### Quick Run (no changes needed)
+
+If the application does not need any modification, the prebuilt standalone build in `/unity_frontend/buildFiles/` can be run directly:
+
+1. Open the `unity_frontend/buildFiles/` folder.
+2. Run the `.exe` found there directly, no Unity installation required on the target machine.
+3. Keep the `.exe` and its accompanying `_Data` folder together in the same location; do not copy or share the `.exe` on its own.
+4. Connect the Arduino and confirm the correct COM port as described in the Troubleshooting section if the serial connection is not detected automatically.
+
 ### Bench Test
 
 For motor-only testing:
@@ -274,7 +293,7 @@ For motor-only testing:
 
 1. Connect the Arduino and physical eye mechanism.
 2. Connect the MPU6050.
-3. Start the Unity application.
+3. Start the Unity application (either the Editor or the prebuilt `.exe`).
 4. Confirm that the serial connection is active.
 5. Select a patient if required.
 6. Start the Dix-Hallpike test workflow.
@@ -378,6 +397,7 @@ The MPU6050 provides accelerometer and gyroscope measurements. Its Digital Motio
 ### Data Persistence
 
 - **Patient data:** JSON format in `Assets/Resources/patients.json`.
+- **Configuration/secrets:** `env` file in `Assets/StreamingAssets/`.
 - **Evaluation results:** CSV files in `unity_frontend/`.
 - **Calibration:** Stored in the Arduino firmware calibration data.
 
@@ -388,9 +408,12 @@ The MPU6050 provides accelerometer and gyroscope measurements. Its Digital Motio
 3. Select Windows as the target platform used for this project.
 4. Configure the required resolution and presentation settings.
 5. Build the standalone application.
-6. On the target system, connect the Arduino and confirm the serial port configuration.
+6. Confirm that `Assets/StreamingAssets/env` exists before building, so the required API keys are bundled into the output automatically.
+7. On the target system, connect the Arduino and confirm the serial port configuration.
 
 The application was developed and tested on Windows 10/11.
+
+> **Sharing a build:** always share the full build output folder (the `.exe` together with its `_Data` folder), never the `.exe` file alone. The `_Data` folder contains `StreamingAssets/env` and other runtime data the application needs to run.
 
 ## Troubleshooting
 
@@ -426,10 +449,12 @@ The application was developed and tested on Windows 10/11.
 
 ### TTS/STT does not work
 
-- Check that the Google Cloud TTS and STT API keys are correctly configured in the .env file as described in the API Configuration section.
+- Confirm the `env` file exists at `Assets/StreamingAssets/env` (or, for a built application, inside the `_Data/StreamingAssets/` folder shipped alongside the `.exe`) and that the Google Cloud TTS and STT API keys are correctly set inside it, as described in the API Configuration section.
+- If running a shared build, confirm the `.exe` was not copied or shared without its `_Data` folder.
 - Check Windows microphone permissions.
 - Confirm that the correct audio input/output devices are selected.
 - Check Unity audio settings.
+- If nothing appears on screen, check `Player.log` (typically under `%USERPROFILE%\AppData\LocalLow\<CompanyName>\<ProductName>\Player.log` on Windows) for the specific error, since a standalone build has no visible console by default.
 
 ## Testing Strategy
 
@@ -459,6 +484,7 @@ The main extension points are:
 - TTS/STT functionality depends on the host computer's audio configuration.
 - The system is intended as a research and training platform; clinical diagnostic validity has not been established by this project.
 - Hardware limits should be maintained to prevent the eye mechanism from being driven beyond its safe mechanical range.
+- Sharing the application requires sharing the full build output folder; the `.exe` alone will not run and will not carry the bundled `env` configuration.
 
 ## Future Work
 

@@ -2,9 +2,12 @@ using System.Collections.Generic;
 using System.IO;
 using UnityEngine;
 
-// Loads KEY=VALUE pairs from a .env file at the Unity project root
-// (sibling of Assets/), so secrets like API keys don't get hardcoded
-// into source files that are committed to git.
+// Loads KEY=VALUE pairs from a .env file placed in Assets/StreamingAssets/.
+// StreamingAssets is the one Unity folder guaranteed to be copied into the
+// build output automatically (Editor and every standalone platform alike),
+// so this works whether run from the Editor or a shared built exe, as long
+// as the whole build output folder (exe + its _Data folder) is shared
+// together, not the exe file alone.
 public static class EnvLoader
 {
     private static Dictionary<string, string> _values;
@@ -23,10 +26,13 @@ public static class EnvLoader
         if (_values != null) return;
         _values = new Dictionary<string, string>();
 
-        string path = Path.Combine(Application.dataPath, "..", ".env");
+        string path = Path.Combine(Application.streamingAssetsPath, "env");
+
         if (!File.Exists(path))
         {
-            Debug.LogWarning($"[EnvLoader] No .env file found at {path}");
+            Debug.LogError($"[EnvLoader] No .env file found at {path}. " +
+                            "Place it at Assets/StreamingAssets/env in the project, " +
+                            "and make sure the whole build output folder is shared, not just the .exe.");
             return;
         }
 
@@ -45,5 +51,7 @@ public static class EnvLoader
 
             _values[key] = value;
         }
+
+        Debug.Log($"[EnvLoader] Loaded {_values.Count} value(s) from {path}");
     }
 }
