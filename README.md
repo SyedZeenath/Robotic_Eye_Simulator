@@ -119,7 +119,7 @@ Evaluation and calibration material:
 - **`Evaluations/Head_angles/`** - Recorded head-angle measurements.
 - Calibration screenshots and supporting images.
 
-### `/unity_frontend/buildFiles/`
+### `/buildFiles/`
 
 Prebuilt standalone application and evaluation data generated during testing:
 
@@ -221,7 +221,7 @@ The serial interface uses **115200 baud**.
 
 TTS/STT functions require the appropriate Windows audio and microphone permissions.
 
-> **Note:** If you only need to run the application as-is, with no code, scene, or asset changes, you do not need to open Unity at all. See `/unity_frontend/buildFiles/` above for the prebuilt `.exe`.
+> **Note:** If you only need to run the application as-is, with no code, scene, or asset changes, you do not need to open Unity at all. See `/buildFiles/` above for the prebuilt `.exe`.
 
 ## Calibration
 
@@ -247,7 +247,7 @@ The firmware contains a separate evaluation section for:
 
 The Unity application also provides `LatencyMonitor` and `SyncDebugOverlay` components for monitoring system behaviour during testing.
 
-Evaluation results are stored in the `unity_frontend/buildFiles/` directory.
+Evaluation results are stored in the `/buildFiles/` directory.
 
 ## Communication Protocol
 
@@ -272,9 +272,9 @@ The exact message format is implemented in `eye_controller.ino` and parsed by `A
 
 ### Quick Run (no changes needed)
 
-If the application does not need any modification, the prebuilt standalone build in `/unity_frontend/buildFiles/` can be run directly:
+If the application does not need any modification, the prebuilt standalone build in `/buildFiles/` can be run directly. The application opens at the home section, which is the starting point for patient selection, simulation and evaluation:
 
-1. Open the `unity_frontend/buildFiles/` folder.
+1. Open the `/buildFiles/` folder.
 2. Run the `Robotic_Eye_Simulator.exe` found there directly, no Unity installation required on the target machine.
 3. Keep the `Robotic_Eye_Simulator.exe` and its accompanying `_Data` folder together in the same location; do not copy or share the `Robotic_Eye_Simulator.exe` on its own.
 4. Connect the Arduino and confirm the correct COM port as described in the Troubleshooting section if the serial connection is not detected automatically.
