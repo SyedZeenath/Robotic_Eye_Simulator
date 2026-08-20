@@ -124,7 +124,7 @@ Evaluation and calibration material:
 Prebuilt standalone application and evaluation data generated during testing:
 
 - **A prebuilt `.exe` and its accompanying `_Data` folder** - the standalone Windows build of the application. If no changes need to be made to the project, this can be run directly without opening or importing the project in Unity. Run the `Robotic_Eye_Simulator.exe` from inside this folder as-is; the `_Data` folder (which contains the bundled `StreamingAssets/env` file among other runtime data) must stay alongside the `Robotic_Eye_Simulator.exe`, since a Unity build is not a single portable file. Copying or sharing the `Robotic_Eye_Simulator.exe` on its own, without its `_Data` folder, will not run.
-(Only for the dissertation scope; `/Builds/` may be removed later.)
+  (Only for the dissertation scope; `/Builds/` may be removed later.)
 - **`latency_results.csv`** - Serial communication latency measurements.
 - **`sync_results.csv`** - Motor synchronisation measurements.
 - **`transfer_latency_results.csv`** - Data transfer latency measurements.
@@ -144,6 +144,7 @@ The tested system uses:
 - **USB connection** - Arduino-to-PC serial communication.
 
 ### PCA9685 Channel Mapping
+
 
 | Eye   | Horizontal | Vertical | Torsion |
 | ----- | ---------: | -------: | ------: |
@@ -502,3 +503,9 @@ Possible extensions include:
 - **Primary target:** Windows 10/11.
 - **Physical system:** Robotic head with six servo-driven eye axes.
 - **Main application:** BPPV/Dix-Hallpike simulation and research evaluation.
+
+## Acknowledgments
+
+I thank Dr. JahanZeb Gul and Dr. Gerard Boyle for their supervision and feedback throughout this project. I'm also grateful to the clinical nursing staff and the design engineering team at St.James's Hospital, Dublin, whose consultation shaped the assessment protocol and instruction language used in this platform.
+
+Particular thanks go to Arslan Akhtar, a Year 3 Innovation & Design student at Maynooth University, who worked as part of the St.James's design team during his internship there and contributed to the mechanical design of the head and support structures.
