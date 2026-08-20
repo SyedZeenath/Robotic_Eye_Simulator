@@ -128,7 +128,6 @@ Prebuilt standalone application and evaluation data generated during testing:
 - **`latency_results.csv`** - Serial communication latency measurements.
 - **`sync_results.csv`** - Motor synchronisation measurements.
 - **`transfer_latency_results.csv`** - Data transfer latency measurements.
-- **`BPPV_Head_Twin_Data/`** - Evaluation data associated with the physical and digital head system.
 
 ## Hardware Requirements
 
