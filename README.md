@@ -37,11 +37,11 @@ The Unity interface can also send commands back to the Arduino to start right-si
 
 ## Project Structure
 
-### `/eye_controller/`
+### `/EyeController/`
 
 Arduino firmware for motor control, IMU tracking, BPPV sequence control, calibration and evaluation.
 
-- **`eye_controller.ino`** - Main Arduino sketch containing:
+- **`EyeController.ino`** - Main Arduino sketch containing:
   - MPU6050 head tracking using the Digital Motion Processor (DMP)
   - PCA9685 servo control
   - Six-channel eye movement control
@@ -52,7 +52,7 @@ Arduino firmware for motor control, IMU tracking, BPPV sequence control, calibra
   - Evaluation routines for positional synchronisation and IMU jitter/noise
   - `SKIP_IMU_TEST` option for bench testing without the IMU
 
-### `/unity_frontend/`
+### `/Frontend/`
 
 Unity project containing the digital twin, user interface, clinical workflow and evaluation tools.
 
@@ -89,14 +89,14 @@ Unity project containing the digital twin, user interface, clinical workflow and
 - **`Assets/Resources/`** - Patient JSON data, textures, materials and other runtime resources.
   - `patients.json` - Patient data used by the application.
 - **`Assets/StreamingAssets/`** - Additional runtime data and configuration, including the `env` configuration file (see API Configuration below). This folder is copied automatically into every build output, which is what lets the `env` file travel with a shared build without any manual copy step.
-- **`Assets/Models/`** - 3D head and eye geometry.
-- **`Assets/Materials/`** - Materials used by the scene.
+- **`Assets/Eye/`** - Eye model assets, materials and prefabs.
+- **`Assets/HeadModel/`** - Head model assets and geometry.
 - **`Packages/`** - Unity package configuration and dependencies.
 - **`ProjectSettings/`** - Unity project and build settings.
 
 Generated folders such as `Logs/` and `Temp/` are not required for the source project and can be omitted from version control.
 
-### `/3D_models/`
+### `/Models/`
 
 CAD models for the physical robotic platform:
 
@@ -107,11 +107,11 @@ CAD models for the physical robotic platform:
 - **`Neck/`** - Neck joint components.
 - **`Base_Hinge_Joint/`** - Base hinge components.
 
-### `/helpers/`
+### `/Helpers/`
 
 - **`photo_angle_measurer.html`** - Browser-based tool used to measure physical eye angles during calibration.
 
-### `/images/`
+### `/Images/`
 
 Evaluation and calibration material:
 
@@ -119,12 +119,12 @@ Evaluation and calibration material:
 - **`Evaluations/Head_angles/`** - Recorded head-angle measurements.
 - Calibration screenshots and supporting images.
 
-### `/buildFiles/`
+### `/Builds/`
 
 Prebuilt standalone application and evaluation data generated during testing:
 
 - **A prebuilt `.exe` and its accompanying `_Data` folder** - the standalone Windows build of the application. If no changes need to be made to the project, this can be run directly without opening or importing the project in Unity. Run the `Robotic_Eye_Simulator.exe` from inside this folder as-is; the `_Data` folder (which contains the bundled `StreamingAssets/env` file among other runtime data) must stay alongside the `Robotic_Eye_Simulator.exe`, since a Unity build is not a single portable file. Copying or sharing the `Robotic_Eye_Simulator.exe` on its own, without its `_Data` folder, will not run.
-(Only for the Dissertation scope, will remove commiting the `/buildFiles/` later on)
+(Only for the dissertation scope; `/Builds/` may be removed later.)
 - **`latency_results.csv`** - Serial communication latency measurements.
 - **`sync_results.csv`** - Motor synchronisation measurements.
 - **`transfer_latency_results.csv`** - Data transfer latency measurements.
@@ -175,14 +175,14 @@ Assets/StreamingAssets/env
 
 The leading dot was dropped deliberately: Unity's asset importer does not reliably include files whose names begin with a dot when copying `StreamingAssets` into a build, so a dotfile placed there can silently fail to ship with the built application. Naming the file `env` instead avoids this and ensures it is bundled correctly every time the project is built.
 
-Create the file by copying the format from `env.example`:
+Create the file by copying the format from `Frontend/.env.example`:
 
 ```env
 GOOGLE_TTS_API_KEY=your-google-cloud-tts-api-key-here
 GOOGLE_STT_API_KEY=your-google-cloud-stt-api-key-here
 ```
 
-For the dissertation version, the personal API keys required to run the application are already included in the `env.example` file for demonstration and evaluation purposes. These keys will be removed after the dissertation evaluation. These keys can be used now for testing the application.
+For the dissertation version, the personal API keys required to run the application are already included in the `Frontend/.env.example` file for demonstration and evaluation purposes. These keys will be removed after the dissertation evaluation. These keys can be used now for testing the application.
 
 To create new API keys, create or select a project in the Google Cloud Console, enable the **Cloud Text-to-Speech API** and **Cloud Speech-to-Text API**, then create an API key under **APIs & Services → Credentials**. Add the generated keys to the corresponding entries in `env`.
 
@@ -196,7 +196,7 @@ The `env` file should not be committed to version control.
 2. Install the required I2Cdev, MPU6050 and Adafruit PWM Servo Driver libraries.
 3. Connect the MPU6050 and PCA9685 to the Arduino I2C interface.
 4. Connect the six servo motors to the PCA9685 channels listed above.
-5. Open `eye_controller/eye_controller.ino`.
+5. Open `EyeController/EyeController.ino`.
 6. Select the correct board and COM port.
 7. Upload the firmware.
 
@@ -211,7 +211,7 @@ The serial interface uses **115200 baud**.
 ### 3. Unity
 
 1. Install Unity 2022.x or a compatible LTS release.
-2. Open the `unity_frontend/` directory through Unity Hub.
+2. Open the `Frontend/` directory through Unity Hub.
 3. Allow Unity to complete the initial asset import.
 4. Open `Assets/Scenes/MainScene.unity`.
 5. Check the `ArduinoSerialReader` component and confirm the COM port.
@@ -221,7 +221,7 @@ The serial interface uses **115200 baud**.
 
 TTS/STT functions require the appropriate Windows audio and microphone permissions.
 
-> **Note:** If you only need to run the application as-is, with no code, scene, or asset changes, you do not need to open Unity at all. See `/buildFiles/` above for the prebuilt `.exe`.
+> **Note:** If you only need to run the application as-is, with no code, scene, or asset changes, you do not need to open Unity at all. See `/Builds/` above for the prebuilt `.exe`.
 
 ## Calibration
 
@@ -232,7 +232,7 @@ The physical eye mechanism requires calibration before comparing physical and di
 Open:
 
 ```text
-helpers/photo_angle_measurer.html
+Helpers/photo_angle_measurer.html
 ```
 
 The tool is used to measure physical eye angles and relate them to the corresponding digital motor commands. The resulting values are used by the calibration lookup tables in the Arduino firmware.
@@ -247,7 +247,7 @@ The firmware contains a separate evaluation section for:
 
 The Unity application also provides `LatencyMonitor` and `SyncDebugOverlay` components for monitoring system behaviour during testing.
 
-Evaluation results are stored in the `/buildFiles/` directory.
+Evaluation results are stored in the `/Builds/` directory.
 
 ## Communication Protocol
 
@@ -266,15 +266,15 @@ C:<h>,<v>,<t>      Calibration command
 
 The Arduino sends status and eye-angle information in a text format containing the current phase and horizontal, vertical and torsional angles.
 
-The exact message format is implemented in `eye_controller.ino` and parsed by `ArduinoSerialReader.cs`.
+The exact message format is implemented in `EyeController.ino` and parsed by `ArduinoSerialReader.cs`.
 
 ## Running the System
 
 ### Quick Run (no changes needed)
 
-If the application does not need any modification, the prebuilt standalone build in `/buildFiles/` can be run directly. The application opens at the home section, which is the starting point for patient selection, simulation and evaluation:
+If the application does not need any modification, the prebuilt standalone build in `/Builds/` can be run directly. The application opens at the home section, which is the starting point for patient selection, simulation and evaluation:
 
-1. Open the `/buildFiles/` folder.
+1. Open the `/Builds/` folder.
 2. Run the `Robotic_Eye_Simulator.exe` found there directly, no Unity installation required on the target machine.
 3. Keep the `Robotic_Eye_Simulator.exe` and its accompanying `_Data` folder together in the same location; do not copy or share the `Robotic_Eye_Simulator.exe` on its own.
 4. Connect the Arduino and confirm the correct COM port as described in the Troubleshooting section if the serial connection is not detected automatically.
@@ -398,7 +398,7 @@ The MPU6050 provides accelerometer and gyroscope measurements. Its Digital Motio
 
 - **Patient data:** JSON format in `Assets/Resources/patients.json`.
 - **Configuration/secrets:** `env` file in `Assets/StreamingAssets/`.
-- **Evaluation results:** CSV files in `unity_frontend/`.
+- **Evaluation results:** CSV files in `Frontend/`.
 - **Calibration:** Stored in the Arduino firmware calibration data.
 
 ## Building the Unity Application
